@@ -1,0 +1,16 @@
+# Ignore specific generated / large directories
+.idea/
+data/
+weights/
+vis/
+
+# Common Python ignores
+__pycache__/
+*.py[cod]
+*.pth
+*.log
+*.png
+.env
+
+# VS Code
+.vscode/
