@@ -96,6 +96,7 @@ class SP(nn.Module):
 
         return Ci * u_sp
 
+
 class HFP(nn.Module):
     def __init__(self, channels, alpha=0.2):
         super().__init__()

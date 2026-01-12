@@ -1,9 +1,11 @@
 import time
 from typing import Optional, Union
 
+import math
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from utils.lmds import LMDS
 from .logger import *
@@ -31,6 +33,7 @@ def train_one_epoch(
     # metric indicators
     first_order_loss = AverageMeter(20)
     second_order_loss = AverageMeter(20)
+    third_order_loss = AverageMeter(20)
     losses = AverageMeter(20)
     batch_times = AverageMeter(20)
 
@@ -52,19 +55,38 @@ def train_one_epoch(
         images = images.to(device)
 
         # train results
-        outputs = model(images)             # (B, 2, H, W) logits
-        # outputs = torch.sigmoid(outputs)    # Must heatmap -> FocalLoss()(Now UNet -> logits)
+        outputs, mu, sigma = model(images)             # (B, 2, H, W) logits
+        # outputs = torch.sigmoid(outputs)    # Must heatmap -> FocalLoss()(Now YNet -> logits)
+
+        # gs
+        y = torch.sigmoid(outputs).detach()
+        noise = torch.empty_like(y).uniform_(-0.5, 0.5)
+        y_q = y + noise
+
+        a = ((y_q + 0.5 - mu) / (sigma + 1e-3))
+        b = ((y_q - 0.5 - mu) / (sigma + 1e-3))
+
+        p = 0.5 * (
+                torch.erf(a / math.sqrt(2.0)) -
+                torch.erf(b / math.sqrt(2.0))
+        )
+        Ry = -torch.log2(p)
+        loss_ie = Ry.mean()
+        loss_sigma = sigma.mean()
 
         gt_mask = targets.to(device).long() # (B, 2, H, W)
 
         # if gt_mask.dim() == 4:
         #     gt_mask = gt_mask.squeeze(1)
 
-        # Loss1 -> UNet(pred loss)
+        # Loss1 -> YNet(pred loss)
         loss = criterion(outputs, gt_mask)
 
         first_order_loss.update(loss.item())
-        second_order_loss.update(0.0)
+        second_order_loss.update(loss_ie.item())
+        third_order_loss.update(loss_sigma.item())
+
+        loss = (loss + 1e-3 * loss_ie + 5e-4 * loss_sigma)
         losses.update(loss.item())
 
         optimizer.zero_grad()
@@ -76,11 +98,13 @@ def train_one_epoch(
                 "Epoch [{:^3}/{:<3}] | Iter {:^5} | LR {:.6f} | "
                 "First {:^6.3f}({:^6.3f}) | "
                 "Second {:.3f}({:.3f}) | "
+                "Third {:.3f}({:.3f}) | "
                 "Total {:^6.3f}({:^6.3f})".format(
                     epoch, args.epoch,
                     step, lr,
                     first_order_loss.val, first_order_loss.avg,
                     second_order_loss.val, second_order_loss.avg,
+                    third_order_loss.val, third_order_loss.avg,
                     losses.val, losses.avg,
                 )
             )
@@ -131,8 +155,9 @@ def val_one_epoch(
         images = images.cuda()
 
         # val results
-        outputs = model(images)
+        outputs, mu, sigma = model(images)
         # outputs = torch.sigmoid(outputs) #
+        outputs = outputs / (1.0 + sigma) # val
 
         points = targets['points']
         labels = targets['labels']

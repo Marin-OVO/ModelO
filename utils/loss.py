@@ -20,7 +20,8 @@ class FocalLoss(torch.nn.Module):
             weights: Optional[torch.Tensor] = None,
             density_weight: Optional[str] = None,
             normalize: bool = False,
-            eps: float = 1e-6
+            eps: float = 1e-6,
+            return_map: bool = False
             ) -> None:
 
         super().__init__()
@@ -35,6 +36,7 @@ class FocalLoss(torch.nn.Module):
         self.density_weight = density_weight
         self.normalize = normalize
         self.eps = eps
+        self.return_map = return_map
 
     def forward(self, output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         B, C, _, _ = target.shape
@@ -56,6 +58,11 @@ class FocalLoss(torch.nn.Module):
 
         pos_loss = torch.log(output) * torch.pow(1 - output, self.alpha) * pos_inds
         neg_loss = torch.log(1 - output) * torch.pow(output, self.alpha) * neg_weights * neg_inds
+
+        # loss map
+        pos_loss_map = - torch.log(output) * torch.pow(1 - output, self.alpha) * pos_inds
+        neg_loss_map = - torch.log(1 - output) * torch.pow(output, self.alpha) * neg_weights * neg_inds
+        loss_map = pos_loss_map + neg_loss_map
 
         num_pos = pos_inds.float().sum(3).sum(2)
         pos_loss = pos_loss.sum(3).sum(2)
@@ -80,6 +87,9 @@ class FocalLoss(torch.nn.Module):
 
         if self.weights is not None:
             loss = self.weights * loss
+
+        if self.return_map:
+            return loss_map
 
         if self.reduction == 'mean':
             return loss.mean()
