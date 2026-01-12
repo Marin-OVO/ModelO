@@ -10,6 +10,7 @@ __pycache__/
 *.pth
 *.log
 *.png
+*.txt
 .env
 
 # VS Code

@@ -39,8 +39,8 @@ class DoubleConv(nn.Module):
             mid_ch = out_ch
 
         self.double_conv = nn.Sequential(
-            ConvBNReLu(in_ch, mid_ch, kernel_size=kernel_size, dilation=dilation),
-            ConvBNReLu(mid_ch, out_ch, kernel_size=kernel_size, dilation=dilation),
+            ConvBNReLu(in_ch, mid_ch, kernel_size=kernel_size, dilation=dilation, with_bn=with_bn),
+            ConvBNReLu(mid_ch, out_ch, kernel_size=kernel_size, dilation=dilation, with_bn=with_bn),
         )
 
     def forward(self, x):

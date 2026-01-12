@@ -55,11 +55,11 @@ def train_one_epoch(
         images = images.to(device)
 
         # train results
-        outputs, mu, sigma = model(images)             # (B, 2, H, W) logits
+        outputs, mu, sigma = model(images)    # (B, 2, H, W) logits
         # outputs = torch.sigmoid(outputs)    # Must heatmap -> FocalLoss()(Now YNet -> logits)
 
         # gs
-        y = torch.sigmoid(outputs).detach()
+        y = outputs.detach()
         noise = torch.empty_like(y).uniform_(-0.5, 0.5)
         y_q = y + noise
 
@@ -70,7 +70,7 @@ def train_one_epoch(
                 torch.erf(a / math.sqrt(2.0)) -
                 torch.erf(b / math.sqrt(2.0))
         )
-        Ry = -torch.log2(p)
+        Ry = -torch.log2(p + 1e-6)
         loss_ie = Ry.mean()
         loss_sigma = sigma.mean()
 
@@ -82,15 +82,17 @@ def train_one_epoch(
         # Loss1 -> YNet(pred loss)
         loss = criterion(outputs, gt_mask)
 
-        first_order_loss.update(loss.item())
-        second_order_loss.update(loss_ie.item())
-        third_order_loss.update(loss_sigma.item())
+        scale_ie = 0.02 * loss.item() / (loss_ie.item() + 1e-8)  # 避免除0
+        scale_sigma = 0.01 * loss.item() / (loss_sigma.item() + 1e-8)
+        total_loss = loss + scale_ie * loss_ie + scale_sigma * loss_sigma
 
-        loss = (loss + 1e-3 * loss_ie + 5e-4 * loss_sigma)
-        losses.update(loss.item())
+        first_order_loss.update(loss.detach().cpu().item())
+        second_order_loss.update(loss_ie.detach().cpu().item())
+        third_order_loss.update(loss_sigma.detach().cpu().item())
+        losses.update(total_loss.detach().cpu().item())
 
         optimizer.zero_grad()
-        loss.backward()
+        total_loss.backward()
         optimizer.step()
 
         if step in print_freq_lst:

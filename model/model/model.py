@@ -24,7 +24,10 @@ class YNet(nn.Module):
         self.up2 = (UpScaling(512, 256 // factor, bilinear))
         self.up3 = (UpScaling(256, 128 // factor, bilinear))
         self.up4 = (UpScaling(128, 64, bilinear))
-        self.outc = (OutConv(64, num_class))
+        self.outc = nn.Sequential(
+            nn.Conv2d(64, num_class, kernel_size=1),
+            nn.Sigmoid()
+        )
 
         self.up4_y = UpScaling(128, 64, bilinear)
 
@@ -33,7 +36,10 @@ class YNet(nn.Module):
             nn.Conv2d(128, 64, 3, padding=1),
             nn.ReLU(inplace=True),
         )
-        self.mu_head = OutConv(64, 1)
+        self.mu_head = nn.Sequential(
+            nn.Conv2d(64, 1, kernel_size=1),
+            nn.Sigmoid()
+        )
         self.sigma_head = nn.Sequential(
             OutConv(64, 1),
             nn.Softplus()
