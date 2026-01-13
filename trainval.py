@@ -9,7 +9,7 @@ import torch
 from torch.utils.data import DataLoader
 from colorama import Fore, Style
 
-from model import UNet, YNet
+from model import UNet, YNet, RetinaPointNet
 from datasets import CrowdDataset
 from utils.metrics import PointsMetrics
 from utils.main import train_one_epoch, val_one_epoch
@@ -93,7 +93,7 @@ def main(args):
         logger.info(f'{arg}: {value}')
         #logger.info('=' * 60)
 
-    model = YNet(num_ch=3, num_class=args.num_classes, bilinear=args.bilinear)
+    model = RetinaPointNet(num_ch=3, num_class=args.num_classes)
     # output: (B, 2, H, W)
     model.to(device)
     logger.info(f'Model created and moved to {device}')
@@ -141,7 +141,7 @@ def main(args):
         albu_transforms=train_albu_transforms,
         end_transforms=train_end_transforms
     ) # image: (3, H, W)
-      # gt   : (1, H, W) hard disk mask / YNet
+      # target   : (1, H, W) hard disk mask / YNet
     val_dataset = CrowdDataset(
         data_root=args.data_root,
         train=False,
@@ -166,7 +166,7 @@ def main(args):
         pin_memory=True,
         num_workers=args.num_worker
     ) # image: (B, 3, H, W)
-      # gt   : (B, 1, H, W) / YNet
+      # target   : (B, 1, H, W) / YNet
     val_dataloader = DataLoader(
         dataset = val_dataset,
         batch_size = 1,
@@ -184,6 +184,7 @@ def main(args):
 
     assert checkpoints in ['best', 'all', 'latest']
     assert select in ['min', 'max']
+    assert validate_on in ['f1_score', 'recall', 'precision', 'accuracy', 'mAP']
 
     last_epoch = 0
     best_epoch = -1

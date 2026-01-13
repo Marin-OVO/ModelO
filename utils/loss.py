@@ -97,30 +97,43 @@ class FocalLoss(torch.nn.Module):
             return loss.sum()
 
 
-# false
-class withFocalLoss(nn.Module):
-    def __init__(self, alpha=0.25, gamma=2.0, reduction='mean'):
+# retinanet focal loss
+class WithFocalLoss(nn.Module):
+    """
+        Focal loss for point / heatmap prediction
+        outputs: sigmoid outputs in [0, 1]
+        target: heatmap in [0, 1]
+    """
+    def __init__(self, alpha=2.0, beta=4.0, eps=1e-6):
         super().__init__()
         self.alpha = alpha
-        self.gamma = gamma
-        self.reduction = reduction
-        self.ce = nn.CrossEntropyLoss(reduction='none')
+        self.beta = beta
+        self.eps = eps
 
-    def forward(self, logits, target):
+    def forward(self, outputs: torch.Tensor, target: torch.Tensor):
         """
-            logits: (B, C, H, W)
-            target: (B, H, W)  class indices
+            outputs: (B, 1, H, W)  sigmoid output
+            target: (B, 1, H, W)  heatmap [0,1]
         """
-        ce_loss = self.ce(logits, target)        # (B, H, W)
-        pt = torch.exp(-ce_loss)                 # pt = softmax prob of GT
-        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
+        outputs = torch.clamp(outputs, self.eps, 1.0 - self.eps)
 
-        if self.reduction == 'mean':
-            return focal_loss.mean()
-        elif self.reduction == 'sum':
-            return focal_loss.sum()
-        else:
-            return focal_loss
+        pos_inds = target.eq(1).float()
+        neg_inds = target.lt(1).float()
+
+        neg_weights = torch.pow(1 - target, self.beta)
+
+        pos_loss = -torch.log(outputs) * torch.pow(1 - outputs, self.alpha) * pos_inds
+        neg_loss = -torch.log(1 - outputs) * torch.pow(outputs, self.alpha) * neg_weights * neg_inds
+
+        num_pos = pos_inds.sum()
+
+        loss = pos_loss.sum() + neg_loss.sum()
+        loss = loss / torch.clamp(num_pos, min=1.0) # loss.mean()
+
+        return loss
+
+
+
 
 
 

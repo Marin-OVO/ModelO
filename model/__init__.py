@@ -1,2 +1,3 @@
 from .unet import UNet
-from .model import YNet
+from .retinanet import RetinaPointNet
+from .mymodel import YNet
