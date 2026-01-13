@@ -11,5 +11,5 @@
     `outputs / (1 + σ)`.
   
   **Results:**
-  - The fixed weighting coefficients(λ) were replaced by the **ratio between each auxiliary loss and the prediction loss**.
-  - Preliminary results were obtained around **2026-01-13**. The achieved **F1-score is in the low 40s**, which is **inferior to the baseline UNet**.
+  - The fixed weighting coefficients (λ) were replaced by the **ratio between each auxiliary loss and the prediction loss**.
+  - Preliminary results were obtained around **2026-01-13**. The achieved **F1-score is 0.4201**, which is **inferior to the baseline UNet**.
