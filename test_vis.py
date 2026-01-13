@@ -27,7 +27,7 @@ def args_parser():
     parser = argparse.ArgumentParser(description=__doc__)
 
     parser.add_argument('--data_root', default='data/crowdsat', type=str)
-    parser.add_argument('--checkpoint_path', default='weights/no_sigmoid/best_model.pth', type=str)
+    parser.add_argument('--checkpoint_path', default='weights/best_model.pth', type=str)
     parser.add_argument('--output_path', default='vis', type=str)
 
     parser.add_argument('--num_classes', default=2, type=int)
