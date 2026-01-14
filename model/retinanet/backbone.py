@@ -6,8 +6,12 @@ from .fpn import BackboneWithFPN, LastLevelMaxPool
 
 
 class Bottleneck(nn.Module):
+    """
+        Pipeline: conv1x1, bn, relu -> conv3x3, bn, relu -> conv1x1, bn, res, relu
+        Channel: in_channels -> out_channels -> out_channels * expansion
+        Size: size -> size/s -> size/s
+    """
     expansion = 4
-
     def __init__(self, in_channel, out_channel, stride=1, downsample=None, norm_layer=None):
         super().__init__()
         if norm_layer is None:
@@ -49,13 +53,19 @@ class Bottleneck(nn.Module):
         # input -> conv1x1 + bn + relu (B, out_ch * scale ,H/s, W/s)
         out = self.conv3(out)
         out = self.bn3(out)
+
         out += identity
         out = self.relu(out)
 
-        return out
+        return out # f(x) + x
 
 
 class ResNet(nn.Module):
+    """
+        Pipeline: conv7x7, bn, relu, pool -> layer1 -> layer2 -> layer3 -> layer4
+        Channel: in_channels -> in_channels -> 2 * in_channels -> 4 * in_channels -> 8 * in_channels
+        Size: size/2, size/4 -> size/4 -> size/8 -> size/16 -> size/32
+    """
     def __init__(self, block, blocks_num, num_classes=1000, include_top=True,
                  norm_layer=None, in_channels=3):
         super().__init__()
@@ -116,7 +126,7 @@ class ResNet(nn.Module):
         x = self.layer3(x)
         x = self.layer4(x)
 
-        if self.include_top:
+        if self.include_top: # full connection
             x = self.avgpool(x)
             x = torch.flatten(x, 1)
             x = self.fc(x)
@@ -149,6 +159,9 @@ def resnet50_fpn_backbone(pretrain_path="",
                           extra_blocks=None,
                           in_channels=3
                           ):
+    """
+
+    """
     resnet_backbone = ResNet(Bottleneck, [3, 4, 6, 3],
                              include_top=False,
                              norm_layer=norm_layer,
@@ -165,7 +178,7 @@ def resnet50_fpn_backbone(pretrain_path="",
     assert 0 <= trainable_layers <= 5
     layers_to_train = ['layer4', 'layer3', 'layer2', 'layer1', 'conv1'][:trainable_layers]
 
-    if trainable_layers == 5:
+    if trainable_layers == 5: # layers_to_train = ['layer4', 'layer3', 'layer2', 'layer1', 'conv1']
         layers_to_train.append("bn1")
 
     for name, parameter in resnet_backbone.named_parameters():

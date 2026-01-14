@@ -189,6 +189,7 @@ def vis(args):
     # save to csv
     csv_path = os.path.join(work_dir, 'test_metrics.csv')
 
+    mAP = np.mean([metrics.ap(c) for c in range(1, metrics.num_classes)]).item()
     metrics.aggregate()
 
     recall = metrics.recall()
@@ -201,6 +202,7 @@ def vis(args):
         writer.writerow(['Precision', precision])
         writer.writerow(['Recall', recall])
         writer.writerow(['F1-score', f1_score])
+        writer.writerow(['mAP', mAP])
 
     print(f"[INFO] test metrics saved to {csv_path}")
 

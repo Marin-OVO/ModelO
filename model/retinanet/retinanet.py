@@ -7,15 +7,16 @@ from .head import RetinaPointHead
 
 
 class RetinaPointNet(nn.Module):
-    def __init__(self, in_channels, num_classes, output_scales=['P3', 'P4', 'P5']):
+    def __init__(self, in_channels, num_classes, output_scales=['P2', 'P3', 'P4']):
         super().__init__()
 
         self.output_scales = output_scales
 
         self.backbone = resnet50_fpn_backbone(
             pretrain_path="model/retinanet/resnet50-0676ba61.pth",
-            trainable_layers=3,
-            in_channels=in_channels
+            trainable_layers=4,
+            in_channels=in_channels,
+            returned_layers=[1, 2, 3, 4], # p2, p3, p4, p5
         )
 
         self.head = RetinaPointHead(
@@ -27,13 +28,15 @@ class RetinaPointNet(nn.Module):
         B, _, H, W = x.shape  # image
 
         x = self.backbone(x)  # OrderedDict
-        x = list(x.values())  # [P3, P4, P5, P6, P7]
+        x = list(x.values())  # [P2, P3, P4, P5, P6]
         x = self.head(x)      # list of (B, C, Hi, Wi)
 
         out = {}
         upsampled_logits = []
 
-        fpn = ['P3', 'P4', 'P5', 'P6', 'P7']
+        fpn = ['P2', 'P3', 'P4', 'P5', 'P6']
+
+        # upsampled to origin image sizes
         for i, (logits, name) in enumerate(zip(x, fpn)):
             upsampled = F.interpolate(
                 logits,
@@ -42,7 +45,7 @@ class RetinaPointNet(nn.Module):
                 align_corners=False
             )
 
-            if name in self.output_scales: # ['P3', 'P4', 'P5']
+            if name in self.output_scales: # ['P2', 'P3', 'P4']
                 out[name] = upsampled
 
             if i < 3:

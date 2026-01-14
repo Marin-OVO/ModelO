@@ -93,7 +93,7 @@ def main(args):
         logger.info(f'{arg}: {value}')
         #logger.info('=' * 60)
 
-    model = RetinaPointNet(num_ch=3, num_class=args.num_classes)
+    model = RetinaPointNet(in_channels=3, num_classes=args.num_classes)
     # output: (B, 2, H, W)
     model.to(device)
     logger.info(f'Model created and moved to {device}')
@@ -141,7 +141,7 @@ def main(args):
         albu_transforms=train_albu_transforms,
         end_transforms=train_end_transforms
     ) # image: (3, H, W)
-      # target   : (1, H, W) hard disk mask / YNet
+      # target: (1, H, W) hard disk mask / YNet
     val_dataset = CrowdDataset(
         data_root=args.data_root,
         train=False,
@@ -287,10 +287,13 @@ def main(args):
         # log val results
         logger.info(
             f"Val Results: "
-            f"Epoch: {epoch + 1:^3}.  "
-            f"{validate_on}: {tmp_results[validate_on]:^8.4f}.  "
-            f"Best-Val: {best_val:^8.4f}.  "
-            f"Best-Epoch: {best_epoch:^3}" # from tmp results
+            f"Epoch: [{epoch + 1:^3}/{args.epoch}] | "
+            f"Precision: {tmp_results['precision']:^8.4f} | "
+            f"Recall: {tmp_results['recall']:^8.4f} | "
+            f"F1-score: {tmp_results['f1_score']:^8.4f} | "
+            f"mAP: {tmp_results['mAP']:^8.4f} | "
+            f"Best-Val({validate_on}): {best_val:^8.4f} | "
+            f"Best-Epoch: {best_epoch:^3} " # from tmp results
         )
 
         lr_scheduler.step()

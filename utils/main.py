@@ -49,6 +49,7 @@ def train_one_epoch(
     lr = optimizer.param_groups[0]['lr']
 
     loss_weights = {
+        'P2': 1.0,
         'P3': 1.0,
         'P4': 0.5,
         'P5': 0.25
@@ -68,9 +69,14 @@ def train_one_epoch(
         outputs = model(images) # tensor: (B, 2, H, W)
         
         # init
+        loss_p2 = torch.tensor(0.0).to(device)
         loss_p3 = torch.tensor(0.0).to(device)
         loss_p4 = torch.tensor(0.0).to(device)
         loss_p5 = torch.tensor(0.0).to(device)
+
+        if 'P2' in outputs:
+            outputs_p2 = torch.sigmoid(outputs['P2'])
+            loss_p2 = criterion(outputs_p2, gt_mask) * loss_weights['P2']
 
         if 'P3' in outputs:
             outputs_p3 = torch.sigmoid(outputs['P3'])
@@ -80,15 +86,15 @@ def train_one_epoch(
             outputs_p4 = torch.sigmoid(outputs['P4'])
             loss_p4 = criterion(outputs_p4, gt_mask) * loss_weights['P4']
 
-        if 'P5' in outputs:
-            outputs_p5 = torch.sigmoid(outputs['P5'])
-            loss_p5 = criterion(outputs_p5, gt_mask) * loss_weights['P5']
+        # if 'P5' in outputs:
+        #     outputs_p5 = torch.sigmoid(outputs['P5'])
+        #     loss_p5 = criterion(outputs_p5, gt_mask) * loss_weights['P5']
 
-        total_loss = loss_p3 + loss_p4 + loss_p5
+        total_loss = loss_p2 + loss_p3 + loss_p4
 
-        first_order_loss.update(loss_p3.detach().cpu().item())
-        second_order_loss.update(loss_p4.detach().cpu().item())
-        third_order_loss.update(loss_p5.detach().cpu().item())
+        first_order_loss.update(loss_p2.detach().cpu().item())
+        second_order_loss.update(loss_p3.detach().cpu().item())
+        third_order_loss.update(loss_p4.detach().cpu().item())
         losses.update(total_loss.detach().cpu().item())
 
         # if gt_mask.dim() == 4:
@@ -110,7 +116,7 @@ def train_one_epoch(
         if step in print_freq_lst:
             logger.info(
                 "Epoch [{:^3}/{:<3}] | Iter {:^5} | LR {:.6f} | "
-                "First {:^6.3f}({:^6.3f}) | "
+                "First {:.3f}({:.3f}) | "
                 "Second {:.3f}({:.3f}) | "
                 "Third {:.3f}({:.3f}) | "
                 "Total {:^6.3f}({:^6.3f})".format(
@@ -129,14 +135,10 @@ def train_one_epoch(
     batch_times.update(batch_end-batch_start)
 
     logger.info(
-        "Val: Epoch [{:^3}/{:<3}] | "
-        "First {:.3f}({:.3f}) | "
-        "Second {:.3f}({:.3f}) | "
+        "Epoch [{:^3}/{:<3}] | LR {:.6f} | "
         "Total {:.3f}({:.3f}) | "
         "Time {:.2f}s".format(
-            epoch, args.epoch,
-            first_order_loss.val, first_order_loss.avg,
-            second_order_loss.val, second_order_loss.avg,
+            epoch, args.epoch, lr,
             losses.val, losses.avg,
             batch_times.avg,
         )
@@ -170,7 +172,8 @@ def val_one_epoch(
 
         # val results
         outputs = model(images)
-        outputs = torch.sigmoid(outputs) #
+        outputs = outputs['P3'] # (B, C, H/8, W/8)
+        outputs = torch.sigmoid(outputs)
 
         points = targets['points']
         labels = targets['labels']
