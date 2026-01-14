@@ -9,6 +9,7 @@
     `loss = loss + λ1 · loss_ie + λ2 · loss_sigma`.
   - During validation, apply uncertainty-aware suppression:  
     `outputs / (1 + σ)`.
+  
   **Results:**
   - The fixed weighting coefficients (λ) were replaced by the **ratio between each auxiliary loss and the prediction loss**.
   - Preliminary results were obtained around **2026-01-13**. The achieved **F1-score is 0.4201**, which is **inferior to the baseline UNet**.
@@ -21,6 +22,7 @@
   - Training is performed using **Focal Loss** for classification.
   - The current framework remains preliminary and requires further refinement. A planned extension is to **incorporate the P2 feature level** to better capture small-scale targets.
   - **2026-01-14:** Feature maps **P2, P3, and P4** are spatially aligned to the original image resolution and jointly supervised using **Focal Loss** during training. During validation, only **P3** is used for prediction.
+  
   **Results:**
   - **2026-01-14:** It was confirmed that the backbone outputs feature levels **P2, P3, P4, P5, and P6** by default.
   - The feature map **key names have been aligned consistently** within the implementation.
