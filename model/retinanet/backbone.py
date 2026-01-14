@@ -77,7 +77,7 @@ class ResNet(nn.Module):
         self.in_channel = 64
 
         self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=self.in_channel, kernel_size=7, stride=2,
-                               padding=3, bias=False)
+                               padding=3, bias=False) # /2
         self.bn1 = norm_layer(self.in_channel)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
@@ -160,7 +160,14 @@ def resnet50_fpn_backbone(pretrain_path="",
                           in_channels=3
                           ):
     """
+        ResNet-50
 
+        conv1
+        layer1: 3xBottleneck(3x3)
+        layer2: 4xBottleneck(4x3)
+        layer3: 6xBottleneck(6x3)
+        layer4: 3xBottleneck(3x3)
+        fc
     """
     resnet_backbone = ResNet(Bottleneck, [3, 4, 6, 3],
                              include_top=False,

@@ -27,3 +27,24 @@
   - **2026-01-14:** It was confirmed that the backbone outputs feature levels **P2, P3, P4, P5, and P6** by default.
   - The feature map **key names have been aligned consistently** within the implementation.
   - The complete model pipeline now **runs successfully on the local machine**, indicating that the overall framework has been correctly integrated.
+
+  - **ResNet Bottleneck:**
+    - Conv1(x) = ReLU(BN(Conv1x1(x)))
+    - Conv2(x) = ReLU(BN(Conv3x3(x)))
+    - Conv3(x) = BN(Conv1x1(x))
+    - Bottleneck(x) = ReLu(Conv3(Conv2(Conv1(x))) + S(x))
+    
+  - **Image preprocessing:** 
+    - f(x) = Tensor(Transform(img)) = y
+    - g(y) = MaxPool(ReLU(BN(Conv7x7(y)))) = z
+    
+  - **ResNet-50:**
+    - C2 = 3 × Bottleneck(z)
+    - C3 = 4 × Bottleneck(z)
+    - C4 = 6 × Bottleneck(z)
+    - C5 = 3 × Bottleneck(z)
+
+    - P5 = Conv1x1(C5)
+    - P4 = Conv1x1(C4) + Up(C5)
+    - P3 = Conv1x1(C3) + Up(C4)
+    - P2 = Conv1x1(C2) + Up(C3)
