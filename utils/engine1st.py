@@ -1,5 +1,5 @@
 """
-    2026-01-12 experiment
+    2026-01-12 experiment model
 """
 import time
 from typing import Optional, Union

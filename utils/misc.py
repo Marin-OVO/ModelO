@@ -1,9 +1,9 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 """
-Misc functions, including distributed helpers.
-Mostly copy-paste from torchvision references.
+    Misc functions, including distributed helpers.
+    Mostly copy-paste from torchvision references.
 
-from P2PNet
+    from P2PNet
 """
 import os
 import subprocess
