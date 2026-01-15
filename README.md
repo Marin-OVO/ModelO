@@ -44,3 +44,5 @@
     - P4 = Conv1x1(C4) + Up(C5)
     - P3 = Conv1x1(C3) + Up(C4)
     - P2 = Conv1x1(C2) + Up(C3)
+
+- 2026-01-15: A new idea was proposed to extend **FCOS** by adding an auxiliary head that captures **local point density**, reflecting whether surrounding points are densely distributed. In addition, a module will be introduced to **extract higher-level semantic context** from deep features to enhance discrimination in crowded scenes.

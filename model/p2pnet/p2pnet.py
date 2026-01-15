@@ -210,7 +210,7 @@ class P2PNet(nn.Module):
         self.fpn = Decoder(256, 512, 512)
 
     def forward(self, samples: NestedTensor):
-        # get the backbone features
+        # get the backbone x
         features = self.backbone(samples)
         # forward the feature pyramid
         features_fpn = self.fpn([features[1], features[2], features[3]])
