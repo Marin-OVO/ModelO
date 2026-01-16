@@ -8,14 +8,14 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
-from model import UNet, YNet, RetinaPointNet, PointNet
+from model import UNet, YNet, RetinaPointNet, PointNet, UNet_
 from datasets import CrowdDataset
 from utils.metrics import PointsMetrics
 # from utils.main import train_one_epoch, val_one_epoch
-from utils.engineO import train_one_epoch, val_one_epoch
+from utils.engine2nd import train_one_epoch, val_one_epoch
 from utils.logger import setup_default_logging, time_str
 import albumentations as A
-from datasets.transforms import Normalize, PointsToMask, DownSample, FIDT, RD
+from datasets.transforms import Normalize, PointsToMask, DownSample, FIDT, RD, MultiTransformsWrapper
 
 
 # trainval
@@ -93,7 +93,7 @@ def main(args):
         logger.info(f'{arg}: {value}')
         #logger.info('=' * 60)
 
-    model = UNet(num_ch=3, num_class=args.num_classes, bilinear=args.bilinear)
+    model = UNet_(num_ch=3, num_class=args.num_classes, bilinear=args.bilinear)
 
     # model = PointNet(in_channels=3, num_classes=args.num_classes)
     # output: (B, 2, H, W)
@@ -120,9 +120,13 @@ def main(args):
         A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
     ]
     train_end_transforms = [
+        MultiTransformsWrapper([
         FIDT(radius=args.radius,
              num_classes=args.num_classes,
-             down_ratio=args.ptm_down_ratio)
+             down_ratio=args.ptm_down_ratio),
+        RD(num_classes=args.num_classes,
+           down_ratio=args.ptm_down_ratio, add_fidt=False, build_qs=True)
+    ])
     ]
     # RD(num_classes=args.num_classes,
     #    down_ratio=args.ptm_down_ratio, add_fidt=False)

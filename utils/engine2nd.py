@@ -1,5 +1,5 @@
 """
-    2026-01-09 experiment: unet
+    2026-01-16 experiment: test(U-Net add a det-head)
 """
 import time
 from typing import Optional, Union
@@ -9,6 +9,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from Demos.mmapfile_demo import offset
 
 from utils.lmds import LMDS
 from .logger import *
@@ -35,6 +36,7 @@ def train_one_epoch(
     """
     # metric indicators
     first_order_loss = AverageMeter(20)
+    second_order_loss = AverageMeter(20)
     losses = AverageMeter(20)
     batch_times = AverageMeter(20)
 
@@ -54,17 +56,25 @@ def train_one_epoch(
     for step, (images, targets) in enumerate(train_dataloader):
 
         images = images.to(device)
-        gt_mask = targets.to(device).long()  # (B, 2, H, W)
+        fidt_map, qs_map = targets
+        fidt_map = fidt_map.to(device)
+        qs_map = qs_map.to(device)
 
         # train results
         outputs = model(images)             # (B, 2, H, W) logits
-        outputs = torch.sigmoid(outputs)    # Must heatmap -> FocalLoss()(Now UNet -> logits)
 
-        loss = criterion(outputs, gt_mask)
+        outputs_cls = outputs['logits']
+        outputs_qs = outputs['qs_logits']
 
-        total_loss = loss
+        outputs_cls = torch.sigmoid(outputs_cls)    # Must heatmap -> FocalLoss()(Now YNet -> logits)
 
-        first_order_loss.update(loss.detach().cpu().item())
+        cls_loss = criterion(outputs_cls, fidt_map)
+        qs_loss = F.l1_loss(outputs_qs, qs_map)
+
+        total_loss = cls_loss + 0.1 * qs_loss
+
+        first_order_loss.update(cls_loss.detach().cpu().item())
+        second_order_loss.update(qs_loss.detach().cpu().item())
         losses.update(total_loss.detach().cpu().item())
 
         optimizer.zero_grad()
@@ -75,10 +85,12 @@ def train_one_epoch(
             logger.info(
                 "Epoch [{:^3}/{:^3}] | Iter {:^5} | LR {:.6f} | "
                 "First {:.3f}({:.3f}) | "
+                "Second {:.3f}({:.3f}) | "
                 "Total {:.3f}({:.3f})".format(
                     epoch, args.epoch,
                     step, lr,
                     first_order_loss.val, first_order_loss.avg,
+                    second_order_loss.val, second_order_loss.avg,
                     losses.val, losses.avg,
                 )
             )
@@ -126,6 +138,7 @@ def val_one_epoch(
 
         # val results
         outputs = model(images)
+        outputs = outputs['logits']
         outputs = torch.sigmoid(outputs)
 
         points = targets['points']

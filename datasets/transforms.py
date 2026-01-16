@@ -436,6 +436,8 @@ class RD:
         add_fidt: bool = False,
         fidt_alpha: float = 0.02,
         fidt_beta: float = 0.75,
+        build_qs: bool = False,
+        sigma_qs: float = 8.0,
     ) -> None: # 2.5, 3.0, 0.4, 1.0
         self.sigma_base = sigma_base
         self.sigma_density = sigma_density
@@ -447,6 +449,9 @@ class RD:
         self.add_fidt = add_fidt
         self.fidt_alpha = fidt_alpha
         self.fidt_beta = fidt_beta
+
+        self.build_qs = build_qs
+        self.sigma_qs = sigma_qs
 
     def __call__(
         self,
@@ -472,7 +477,7 @@ class RD:
                 cls_points = target["points"][target["labels"] == (cls + 1)]
                 hybrid_map = self._hybrid_transform(cls_points, device)
                 all_maps.append(hybrid_map)
-            rd_map = torch.stack(all_maps, dim=0) if self.num_classes > 1 else all_maps[0].unsqueeze(0) # (1, H, W)
+            rd_map = torch.stack(all_maps, dim=0) if self.num_classes > 1 else all_maps[0].unsqueeze(0)
         else:
             if self.num_classes == 1:
                 new_target = target.copy()
@@ -484,7 +489,34 @@ class RD:
         if self.add_bg:
             rd_map = self._add_background(rd_map)
 
-        return image, rd_map.type(image.type())
+        rd_map = rd_map.type(image.type())
+
+        if self.build_qs:
+            if self.num_classes == 1:
+                qs_map = self._build_qs_gt(
+                    target["points"],
+                    self.img_height,
+                    self.img_width,
+                    self.sigma_qs
+                )
+            else:
+                qs_maps = []
+                device = target["points"].device
+                for cls in range(self.num_classes):
+                    cls_points = target["points"][target["labels"] == (cls + 1)]
+                    qs_map_cls = self._build_qs_gt(
+                        cls_points,
+                        self.img_height,
+                        self.img_width,
+                        self.sigma_qs
+                    )
+                    qs_maps.append(qs_map_cls)
+                qs_map = torch.cat(qs_maps, dim=0) if len(qs_maps) > 1 else qs_maps[0]
+
+            qs_map = qs_map.type(image.type())
+            return image, qs_map
+
+        return image, rd_map
 
     def _onehot(self, target: Dict[str, torch.Tensor]) -> torch.Tensor:
         """
@@ -589,3 +621,58 @@ class RD:
         hybrid_map = torch.max(hybrid_map, S.squeeze(0).squeeze(0))
 
         return hybrid_map # (H, W)
+
+    def build_qs_gt(points, H, W, sigma_qs):
+        S = torch.zeros((1, 1, H, W), device=points.device)
+
+        if points.numel() > 0:
+            y = points[:, 1].long().clamp(0, H - 1)
+            x = points[:, 0].long().clamp(0, W - 1)
+            S.view(-1).put_(y * W + x, torch.ones(len(points), device=points.device), accumulate=True)
+
+        qs = gaussian_blur_torch(S, sigma_qs)
+        qs = qs / (qs.max() + 1e-6)
+
+        return qs.squeeze(0)  # (1,H,W)
+
+    def _build_qs_gt(
+            self,
+            points: torch.Tensor,
+            H: int,
+            W: int,
+            sigma_qs: float
+    ) -> torch.Tensor:
+        """
+            Build query selection ground truth map using Gaussian blur
+
+            Args:
+                points: Point annotations tensor of shape (N, 2) where N is number of points
+                H: Height of output map
+                W: Width of output map
+                sigma_qs: Sigma parameter for Gaussian blur
+
+            Returns:
+                Gaussian blurred and normalized map of shape (1, H, W)
+        """
+        if not isinstance(points, torch.Tensor):
+            points = torch.as_tensor(points, dtype=torch.long)
+
+        device = points.device
+        S = torch.zeros((1, 1, H, W), device=device)
+
+        if points.numel() > 0:
+            if points.dim() == 1:
+                points = points.unsqueeze(0)
+
+            y = points[:, 1].long().clamp(0, H - 1)
+            x = points[:, 0].long().clamp(0, W - 1)
+
+            S.view(-1).put_(y * W + x, torch.ones(len(points), device=device), accumulate=True)
+
+        qs = gaussian_blur_torch(S, sigma_qs)
+
+        max_val = qs.max()
+        if max_val > 0:
+            qs = qs / max_val
+
+        return qs.squeeze(0)  # (1, H, W)

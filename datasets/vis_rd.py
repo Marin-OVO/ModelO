@@ -21,7 +21,7 @@ target = {
     "labels": labels
 }
 
-rd = RD(sigma_base=2.5, sigma_density=3, lambda_inhibit=0.5, gamma=1.0, add_fidt=False)
+rd = RD(sigma_base=2.5, sigma_density=3, lambda_inhibit=0.5, gamma=1.0, add_fidt=False, build_qs=True)
 img_t, rd_map = rd(image, target)
 rd_map = rd_map.squeeze(0)
 
