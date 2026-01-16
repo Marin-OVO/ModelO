@@ -7,15 +7,15 @@ import pandas as pd
 
 import torch
 from torch.utils.data import DataLoader
-from colorama import Fore, Style
 
-from model import UNet, YNet, RetinaPointNet
+from model import UNet, YNet, RetinaPointNet, PointNet
 from datasets import CrowdDataset
 from utils.metrics import PointsMetrics
-from utils.main import train_one_epoch, val_one_epoch
+# from utils.main import train_one_epoch, val_one_epoch
+from utils.engineO import train_one_epoch, val_one_epoch
 from utils.logger import setup_default_logging, time_str
 import albumentations as A
-from datasets.transforms import Normalize, PointsToMask, DownSample
+from datasets.transforms import Normalize, PointsToMask, DownSample, FIDT, RD
 
 
 # trainval
@@ -93,7 +93,9 @@ def main(args):
         logger.info(f'{arg}: {value}')
         #logger.info('=' * 60)
 
-    model = RetinaPointNet(in_channels=3, num_classes=args.num_classes)
+    model = UNet(num_ch=3, num_class=args.num_classes, bilinear=args.bilinear)
+
+    # model = PointNet(in_channels=3, num_classes=args.num_classes)
     # output: (B, 2, H, W)
     model.to(device)
     logger.info(f'Model created and moved to {device}')
@@ -118,10 +120,18 @@ def main(args):
         A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
     ]
     train_end_transforms = [
-        PointsToMask(radius=args.radius,
-                     num_classes=args.num_classes,
-                     squeeze=False, down_ratio=args.ptm_down_ratio)
+        FIDT(radius=args.radius,
+             num_classes=args.num_classes,
+             down_ratio=args.ptm_down_ratio)
     ]
+    # RD(num_classes=args.num_classes,
+    #    down_ratio=args.ptm_down_ratio, add_fidt=False)
+    # FIDT(radius=args.radius,
+    #      num_classes=args.num_classes,
+    #      down_ratio=args.ptm_down_ratio)
+    # PointsToMask(radius=args.radius,
+    #              num_classes=args.num_classes,
+    #              squeeze=False, down_ratio=args.ptm_down_ratio)
 
     # normalize + point -> mask + to_tensor
     val_albu_transforms = [
@@ -166,7 +176,7 @@ def main(args):
         pin_memory=True,
         num_workers=args.num_worker
     ) # image: (B, 3, H, W)
-      # target   : (B, 1, H, W) / YNet
+      # target: (B, 1, H, W)
     val_dataloader = DataLoader(
         dataset = val_dataset,
         batch_size = 1,
@@ -204,7 +214,7 @@ def main(args):
 
     for epoch in range(last_epoch, args.epoch):
         logger.info('=' * 60)
-        logger.info('Epoch [{:^3}/{:<3}]'.format(epoch + 1, args.epoch))
+        logger.info('Epoch [{:^3}/{:^3}]'.format(epoch + 1, args.epoch))
         # logger.info('=' * 60)
 
         # train
@@ -287,7 +297,7 @@ def main(args):
         # log val results
         logger.info(
             f"Val Results: "
-            f"Epoch: [{epoch + 1:^3}/{args.epoch}] | "
+            f"Epoch: [{epoch + 1:^3}/{args.epoch:^3}] | "
             f"Precision: {tmp_results['precision']:^8.4f} | "
             f"Recall: {tmp_results['recall']:^8.4f} | "
             f"F1-score: {tmp_results['f1_score']:^8.4f} | "

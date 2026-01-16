@@ -104,7 +104,7 @@ class WithFocalLoss(nn.Module):
         outputs: sigmoid outputs in [0, 1]
         target: heatmap in [0, 1]
     """
-    def __init__(self, alpha=2.0, beta=4.0, eps=1e-6):
+    def __init__(self, alpha=2.0, beta=4.0, eps=1e-3):
         super().__init__()
         self.alpha = alpha
         self.beta = beta
@@ -119,6 +119,9 @@ class WithFocalLoss(nn.Module):
 
         pos_inds = target.eq(1).float()
         neg_inds = target.lt(1).float()
+        # tau = 0.95
+        # pos_inds = (target > tau).float()
+        # neg_inds = (target <= tau).float()
 
         neg_weights = torch.pow(1 - target, self.beta)
 

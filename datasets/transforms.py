@@ -1,10 +1,12 @@
 import PIL
 from PIL import Image
 import numpy
+import numpy as np
 import torch
 import torchvision
-import scipy
+import torch.nn.functional as F
 
+import scipy
 from typing import Dict, Optional, Union, Tuple, List, Any
 
 from utils.registry import Registry
@@ -19,15 +21,36 @@ def _point_buffer(x: int, y: int, mask: torch.Tensor, radius: int) -> torch.Tens
     buffer = (x_t.unsqueeze(0) - x) ** 2 + (y_t.unsqueeze(1) - y) ** 2 < radius ** 2
     return buffer
 
+def gaussian_blur_torch(x: torch.Tensor, sigma: float) -> torch.Tensor:
+    """
+        x: (1, 1, H, W)
+    """
+    radius = int(3 * sigma)
+    size = 2 * radius + 1
+
+    coords = torch.arange(size, device=x.device) - radius
+    kernel = torch.exp(-(coords ** 2) / (2 * sigma ** 2))
+    kernel = kernel / kernel.sum()
+
+    kernel_x = kernel.view(1, 1, 1, -1)
+    kernel_y = kernel.view(1, 1, -1, 1)
+
+    x = F.conv2d(x, kernel_x, padding=(0, radius))
+    x = F.conv2d(x, kernel_y, padding=(radius, 0))
+
+    return x
+
+
 @TRANSFORMS.register()
 class MultiTransformsWrapper:
-    ''' Independently applies each input transformation to the called input and
-    returns the results separately in the same order as the specified transforms
+    """
+        Independently applies each input transformation to the called input and
+        returns the results separately in the same order as the specified transforms
 
-    Args:
-        transforms(list): list of transforms that take image (PIL or Tensor) and
-            target (dict) as inputs
-    '''
+        Args:
+            transforms(list): list of transforms that take image (PIL or Tensor) and
+                target (dict) as inputs
+    """
 
     def __init__(self, transforms: List[object]) -> None:
         self.transforms = transforms
@@ -37,18 +60,18 @@ class MultiTransformsWrapper:
             image: Union[PIL.Image.Image, torch.Tensor],
             target: Dict[str, torch.Tensor]
     ) -> Tuple[torch.Tensor, Tuple[torch.Tensor]]:
-        '''
-        Args:
-            image (PIL.Image.Image or torch.Tensor): image of reference [C,H,W], only for
-                pipeline convenience
-            target (dict): corresponding target containing at least 'points' and 'labels'
-                keys, with torch.Tensor as value. Labels must be integers!
+        """
+            Args:
+                image (PIL.Image.Image or torch.Tensor): image of reference [C,H,W], only for
+                    pipeline convenience
+                target (dict): corresponding target containing at least 'points' and 'labels'
+                    keys, with torch.Tensor as value. Labels must be integers!
 
-        Returns:
-            Tuple[torch.Tensor, Tuple[torch.Tensor]]:
-                the transormed image and the tuple of transformed outputs in the same
-                order as the specified transforms
-        '''
+            Returns:
+                Tuple[torch.Tensor, Tuple[torch.Tensor]]:
+                    the transormed image and the tuple of transformed outputs in the same
+                    order as the specified transforms
+        """
 
         outputs = []
         for trans in self.transforms:
@@ -60,8 +83,9 @@ class MultiTransformsWrapper:
 
 @TRANSFORMS.register()
 class SampleToTensor:
-    "Convert image and target to Tensors"
-
+    """
+        Convert image and target to Tensors
+    """
     def __call__(
             self,
             img: Union[Image.Image, torch.Tensor],
@@ -69,10 +93,10 @@ class SampleToTensor:
             crow_type: str = 'point'
             ) -> Tuple[torch.Tensor, str]:
         """
-        :param img: PIL image with [C, H, W] shape
-        :param target: corresponding target
-        :param crowd_type: crowd-labeled type, including point, bbox, and density. In this project, point type is used.
-        :return: Tuple[torch.Tensor, dict]: the transormed image and target
+            img: PIL image with [C, H, W] shape
+            target: corresponding target
+            crowd_type: crowd-labeled type, including point, bbox, and density. In this project, point type is used.
+            return: Tuple[torch.Tensor, dict]: the transormed image and target
         """
 
         tr_img = torchvision.transforms.ToTensor()(img)
@@ -110,8 +134,9 @@ class UnNormalize:
 
 @TRANSFORMS.register()
 class Normalize:
-    "normalization"
-
+    """
+        normalization
+    """
     def __init__(
             self,
             mean: Optional[Tuple[float, float, float]] = (0.485, 0.456, 0.406),
@@ -133,8 +158,9 @@ class Normalize:
 # gt points annotation -> /2
 @TRANSFORMS.register()
 class DownSample:
-    "DownSample img by a ratio "
-
+    """
+        DownSample img by a ratio
+    """
     def __init__(
             self,
             down_ratio: int = 2,
@@ -164,8 +190,10 @@ class DownSample:
 # point -> GS mask
 @TRANSFORMS.register()
 class PointsToMask:
-    "Convert points annotation to mask with a buffer option"
-    "based on https://github.com/Alexandre-Delplanque/HerdNet/blob/main/animaloc/data/transforms.py"
+    """
+        Convert points annotation to mask with a buffer option
+        based on https://github.com/Alexandre-Delplanque/HerdNet/blob/main/animaloc/data/transforms.py
+    """
 
     def __init__(
             self,
@@ -176,23 +204,23 @@ class PointsToMask:
             down_ratio: Optional[int] = None,
             target_type: str = 'long'
     ) -> None:
-        '''
-        Args:
-            radius (int, optional): buffer (pixel radius) to define a point in
-                the mask. Defautls to 1 (i.e. non buffer)
-            num_classes (int, optional): number of classes, background included.
-                Defaults to 2
-            onehot (bool, optional): set to True do enable one-hot encoding.
-                Defaults to False
-            squeeze (bool, optional): when onehot is False, set to True to squeeze the
-                mask to get a Tensor of shape [H,W], otherwise the returned mask has
-                a shape of [1,H,W].
-                Defaults to False
-            down_ratio (int, optional): if specified, the target will be downsampled
-                according to the ratio.
-                Defaults to None
-            target_type (str, optional): output data type of target. Defaults to 'long'.
-        '''
+        """
+            Args:
+                radius (int, optional): buffer (pixel radius) to define a point in
+                    the mask. Defautls to 1 (i.e. non buffer)
+                num_classes (int, optional): number of classes, background included.
+                    Defaults to 2
+                onehot (bool, optional): set to True do enable one-hot encoding.
+                    Defaults to False
+                squeeze (bool, optional): when onehot is False, set to True to squeeze the
+                    mask to get a Tensor of shape [H,W], otherwise the returned mask has
+                    a shape of [1,H,W].
+                    Defaults to False
+                down_ratio (int, optional): if specified, the target will be downsampled
+                    according to the ratio.
+                    Defaults to None
+                target_type (str, optional): output data type of target. Defaults to 'long'.
+        """
 
         assert target_type in ['long', 'float'], \
             f"target type must be either 'long' or 'float', got {target_type}"
@@ -210,18 +238,17 @@ class PointsToMask:
             image: Union[PIL.Image.Image, torch.Tensor],
             target: Dict[str, torch.Tensor]
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        '''
-        Args:
-            image (PIL.Image.Image or torch.Tensor): image of reference [C,H,W], only for
-                pipeline convenience
-            target (dict): corresponding target containing at least 'points' and 'labels'
-                keys, with torch.Tensor as value. Labels must be integers!
+        """
+            Args:
+                image (PIL.Image.Image or torch.Tensor): image of reference [C,H,W], only for
+                    pipeline convenience
+                target (dict): corresponding target containing at least 'points' and 'labels'
+                    keys, with torch.Tensor as value. Labels must be integers!
 
-        Returns:
-            Tuple[torch.Tensor, torch.Tensor]:
-                the transormed image and the mask
-        '''
-
+            Returns:
+                Tuple[torch.Tensor, torch.Tensor]:
+                    the transormed image and the mask
+        """
         if isinstance(image, PIL.Image.Image):
             image = torchvision.transforms.ToTensor()(image)
 
@@ -262,17 +289,18 @@ class PointsToMask:
 # FIDT
 @TRANSFORMS.register()
 class FIDT:
-    ''' Convert points annotations into Focal-Inverse-Distance-Transform map.
+    """
+        Convert points annotations into Focal-Inverse-Distance-Transform map.
 
-    In case of multi-class, returns one-hot encoding masks.
+        In case of multi-class, returns one-hot encoding masks.
 
-    For binary case, you can let the num_classes argument by default, this will return a
-    density map of one channel only [1, H, W].
+        For binary case, you can let the num_classes argument by default, this will return a
+        density map of one channel only [1, H, W].
 
-    Inspired from:
-    Liang et al. (2021) - "Focal Inverse Distance Transform Maps for Crowd Localization
-    and Counting in Dense Crowd"
-    '''
+        Inspired from:
+        Liang et al. (2021) - "Focal Inverse Distance Transform Maps for Crowd Localization
+        and Counting in Dense Crowd"
+    """
 
     def __init__(
             self,
@@ -284,24 +312,24 @@ class FIDT:
             add_bg: bool = False,
             down_ratio: Optional[int] = None
     ) -> None:
-        '''
-        Args:
-            alpha (float, optional): parameter, can be adjusted. Defaults to 0.02
-            beta (float, optional): parameter, can be adjusted. Defaults to 0.75
-            c (float, optional): parameter, can be adjusted. Defaults to 1.0
-            radius (int, optional): buffer (pixel radius) to define a point in
-                the mask. Defautls to 1 (i.e. non buffer)
-            num_classes (int, optional): number of classes, background included. If
-                higher than 2, returns one-hot encoding masks [C, H, W], otherwise
-                returns a binary mask [1, H, W] even if different categories of labels
-                are called. Defaults to 2
-            add_bg (bool, optional): set to True to add background map in any case. It
-                is built by substracting all positive locations from ones tensor.
-                Defaults to False
-            down_ratio (int, optional): if specified, the target will be downsampled
-                according to the ratio.
-                Defaults to None
-        '''
+        """
+            Args:
+                alpha (float, optional): parameter, can be adjusted. Defaults to 0.02
+                beta (float, optional): parameter, can be adjusted. Defaults to 0.75
+                c (float, optional): parameter, can be adjusted. Defaults to 1.0
+                radius (int, optional): buffer (pixel radius) to define a point in
+                    the mask. Defautls to 1 (i.e. non buffer)
+                num_classes (int, optional): number of classes, background included. If
+                    higher than 2, returns one-hot encoding masks [C, H, W], otherwise
+                    returns a binary mask [1, H, W] even if different categories of labels
+                    are called. Defaults to 2
+                add_bg (bool, optional): set to True to add background map in any case. It
+                    is built by substracting all positive locations from ones tensor.
+                    Defaults to False
+                down_ratio (int, optional): if specified, the target will be downsampled
+                    according to the ratio.
+                    Defaults to None
+        """
 
         self.alpha = alpha
         self.beta = beta
@@ -316,17 +344,17 @@ class FIDT:
         image: Union[PIL.Image.Image, torch.Tensor],
         target: Dict[str, torch.Tensor]
         ) -> Tuple[torch.Tensor, torch.Tensor]:
-        '''
-        Args:
-            image (PIL.Image.Image or torch.Tensor): image of reference [C,H,W], only for
-                pipeline convenience
-            target (dict): corresponding target containing at least 'points' and 'labels'
-                keys, with torch.Tensor as value. Labels must be integers!
+        """
+            Args:
+                image (PIL.Image.Image or torch.Tensor): image of reference [C,H,W], only for
+                    pipeline convenience
+                target (dict): corresponding target containing at least 'points' and 'labels'
+                    keys, with torch.Tensor as value. Labels must be integers!
 
-        Returns:
-            Tuple[torch.Tensor, torch.Tensor]:
-                the transormed image and the FIDT map(s)
-        '''
+            Returns:
+                Tuple[torch.Tensor, torch.Tensor]:
+                    the transormed image and the FIDT map(s)
+        """
 
         if isinstance(image, PIL.Image.Image):
             image = torchvision.transforms.ToTensor()(image)
@@ -388,4 +416,176 @@ class FIDT:
         merged_dist = dist_map.sum(dim=0, keepdim=True)
         background = torch.sub(background, merged_dist)
         output = torch.cat((background, dist_map), dim=0)
+
         return output
+
+
+class RD:
+    """
+        Reaction–Diffusion based GT generator
+    """
+    def __init__(
+        self,
+        sigma_base: float=2.5,
+        sigma_density: float=3.0,
+        lambda_inhibit: float=0.4,
+        gamma: float = 1.0,
+        num_classes: int = 2,
+        add_bg: bool = False,
+        down_ratio: int = None,
+        add_fidt: bool = False,
+        fidt_alpha: float = 0.02,
+        fidt_beta: float = 0.75,
+    ) -> None: # 2.5, 3.0, 0.4, 1.0
+        self.sigma_base = sigma_base
+        self.sigma_density = sigma_density
+        self.lambda_inhibit = lambda_inhibit
+        self.gamma = gamma
+        self.num_classes = num_classes - 1
+        self.add_bg = add_bg
+        self.down_ratio = down_ratio
+        self.add_fidt = add_fidt
+        self.fidt_alpha = fidt_alpha
+        self.fidt_beta = fidt_beta
+
+    def __call__(
+        self,
+        image: Union[PIL.Image.Image, torch.Tensor],
+        target: Dict[str, torch.Tensor],
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+
+        if isinstance(image, PIL.Image.Image):
+            image = torchvision.transforms.ToTensor()(image)
+
+        self.img_height, self.img_width = image.size(1), image.size(2)
+        if self.down_ratio is not None:
+            self.img_height = self.img_height // self.down_ratio
+            self.img_width = self.img_width // self.down_ratio
+            _, target = DownSample(down_ratio=self.down_ratio, crowd_type='point')(
+                image, target.copy()
+            )
+
+        if self.add_fidt:
+            all_maps = []
+            device = target["points"].device if "points" in target else torch.device("cpu")
+            for cls in range(self.num_classes):
+                cls_points = target["points"][target["labels"] == (cls + 1)]
+                hybrid_map = self._hybrid_transform(cls_points, device)
+                all_maps.append(hybrid_map)
+            rd_map = torch.stack(all_maps, dim=0) if self.num_classes > 1 else all_maps[0].unsqueeze(0) # (1, H, W)
+        else:
+            if self.num_classes == 1:
+                new_target = target.copy()
+                new_target["labels"] = torch.ones_like(target["labels"])
+                rd_map = self._onehot(new_target)
+            else:
+                rd_map = self._onehot(target)
+
+        if self.add_bg:
+            rd_map = self._add_background(rd_map)
+
+        return image, rd_map.type(image.type())
+
+    def _onehot(self, target: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """
+            Generate RD rd_map per class
+        """
+        device = target["points"].device
+        rd_map = torch.zeros(
+            (self.num_classes, self.img_height, self.img_width),
+            device=device,
+        )
+
+        if len(target["points"]) == 0:
+            return rd_map
+
+        for cls in range(self.num_classes):
+            cls_points = target["points"][target["labels"] == (cls + 1)]
+            if len(cls_points) == 0:
+                continue
+
+            rd_map[cls] = self._reaction_diffusion(cls_points, device)
+
+        return rd_map
+
+    def _reaction_diffusion(
+        self,
+        points: torch.Tensor,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """
+            Core RD formulation:
+            u = G_base(S) / (1 + λ * G_density(S))
+        """
+        # S(x)
+        S = torch.zeros((1, 1, self.img_height, self.img_width), device=device)
+        indices_y = points[:, 1].long().clamp(0, self.img_height - 1)
+        indices_x = points[:, 0].long().clamp(0, self.img_width - 1)
+        S.view(-1).put_(indices_y * self.img_width + indices_x,
+                        torch.ones(len(points), device=device), accumulate=True)
+
+        # GdS = Gd * S(x)
+        GdS = gaussian_blur_torch(S, self.sigma_density)
+        # GbS = Gb * S(x)
+        GbS = gaussian_blur_torch(S, self.sigma_base)
+
+        # U = Gb * S(x) / (1 + lambda * Gd * S(x))
+        # U = Gb * S(x) / (eps + 1.0 + lambda * Gd * S(x))
+        # U = Gb * S(x) / (eps + Gb * S(x) + lambda * Gd * S(x))
+        u = GbS / (1.0 + self.lambda_inhibit * GdS + 1e-6)
+
+        u = u / (u.max() + 1e-7)
+        u = torch.pow(u, self.gamma)
+        u = torch.max(u, S)
+
+        return u.squeeze(0)
+
+    def _add_background(self, heatmap: torch.Tensor) -> torch.Tensor:
+        background = torch.ones((1, *heatmap.shape[1:]), device=heatmap.device)
+        merged = heatmap.sum(dim=0, keepdim=True)
+        background = torch.clamp(background - merged, min=0.0)
+
+        return torch.cat((background, heatmap), dim=0)
+
+    def _hybrid_transform(
+            self,
+            points: torch.Tensor,
+            device: torch.device,
+    ) -> torch.Tensor:
+        """
+            Hybrid RD + FIDT transform
+            Uses FIDT implementation consistent with FIDT class
+        """
+        H, W = self.img_height, self.img_width
+
+        # Create point mask S(x)
+        S = torch.zeros((1, 1, self.img_height, self.img_width), device=device)
+        indices_y = points[:, 1].long().clamp(0, self.img_height - 1)
+        indices_x = points[:, 0].long().clamp(0, self.img_width - 1)
+        S.view(-1).put_(indices_y * self.img_width + indices_x,
+                        torch.ones(len(points), device=device), accumulate=True)
+
+        GdS = gaussian_blur_torch(S, self.sigma_density)
+        inhibition_factor = 1.0 / (1.0 + self.lambda_inhibit * GdS + 1e-6)
+
+        mask = torch.ones((self.img_height, self.img_width), device=device)
+        if len(points) > 0:
+            for point in points:
+                x, y = point[0], point[1]
+                point_buffer = _point_buffer(x, y, mask, 1)
+                mask[point_buffer] = 0
+
+        mask_cpu = mask.cpu().numpy()
+        dist_map = scipy.ndimage.distance_transform_edt(mask_cpu)
+        dist_map = torch.from_numpy(dist_map).to(device=device)
+
+        fidt_map = 1 / (torch.pow(dist_map, self.fidt_alpha * dist_map + self.fidt_beta) + 1.0)
+        fidt_map = torch.where(fidt_map < 0.01, 0., fidt_map)
+
+        hybrid_map = fidt_map * inhibition_factor.squeeze(0).squeeze(0)
+
+        hybrid_map = hybrid_map / (hybrid_map.max() + 1e-7)
+        hybrid_map = torch.pow(hybrid_map, self.gamma)
+        hybrid_map = torch.max(hybrid_map, S.squeeze(0).squeeze(0))
+
+        return hybrid_map # (H, W)
