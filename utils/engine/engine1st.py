@@ -1,5 +1,5 @@
 """
-    2026-01-09 experiment: unet
+    2026-01-12 experiment: model
 """
 import time
 from typing import Optional, Union
@@ -11,9 +11,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from utils.lmds import LMDS
-from .logger import *
-from .averager import *
-from .loss import *
+from utils.logger import *
+from utils.averager import *
+from utils.loss import *
 
 
 # train/val epoch: train -> FocalLoss
@@ -27,7 +27,7 @@ def train_one_epoch(
         logger: logging.Logger,
         print_freq: int,
         args,
-) -> float:
+        ) -> float:
     """
         Img   -> Model        -> dense map  (H×W)
         GT    -> PointsToMask -> dense mask (H×W)
@@ -35,6 +35,8 @@ def train_one_epoch(
     """
     # metric indicators
     first_order_loss = AverageMeter(20)
+    second_order_loss = AverageMeter(20)
+    third_order_loss = AverageMeter(20)
     losses = AverageMeter(20)
     batch_times = AverageMeter(20)
 
@@ -50,21 +52,46 @@ def train_one_epoch(
     lr = optimizer.param_groups[0]['lr']
 
     # FocalLoss
-    criterion = WithFocalLoss(alpha=2.0, beta=4.0)
+    criterion = FocalLoss(reduction="mean", normalize=True)
     for step, (images, targets) in enumerate(train_dataloader):
 
         images = images.to(device)
-        gt_mask = targets.to(device).long()  # (B, 2, H, W)
 
         # train results
-        outputs = model(images)             # (B, 2, H, W) logits
-        outputs = torch.sigmoid(outputs)    # Must heatmap -> FocalLoss()(Now UNet -> logits)
+        outputs, mu, sigma = model(images)    # (B, 2, H, W) logits
+        # outputs = torch.sigmoid(outputs)    # Must heatmap -> FocalLoss()(Now YNet -> logits)
 
+        # gs
+        y = outputs.detach()
+        noise = torch.empty_like(y).uniform_(-0.5, 0.5)
+        y_q = y + noise
+
+        a = ((y_q + 0.5 - mu) / (sigma + 1e-3))
+        b = ((y_q - 0.5 - mu) / (sigma + 1e-3))
+
+        p = 0.5 * (
+                torch.erf(a / math.sqrt(2.0)) -
+                torch.erf(b / math.sqrt(2.0))
+        )
+        Ry = -torch.log2(p + 1e-6)
+        loss_ie = Ry.mean()
+        loss_sigma = sigma.mean()
+
+        gt_mask = targets.to(device).long() # (B, 2, H, W)
+
+        # if gt_mask.dim() == 4:
+        #     gt_mask = gt_mask.squeeze(1)
+
+        # Loss1 -> YNet(outputs loss)
         loss = criterion(outputs, gt_mask)
 
-        total_loss = loss
+        scale_ie = 0.02 * loss.item() / (loss_ie.item() + 1e-8)  # 避免除0
+        scale_sigma = 0.01 * loss.item() / (loss_sigma.item() + 1e-8)
+        total_loss = loss + scale_ie * loss_ie + scale_sigma * loss_sigma
 
         first_order_loss.update(loss.detach().cpu().item())
+        second_order_loss.update(loss_ie.detach().cpu().item())
+        third_order_loss.update(loss_sigma.detach().cpu().item())
         losses.update(total_loss.detach().cpu().item())
 
         optimizer.zero_grad()
@@ -73,12 +100,16 @@ def train_one_epoch(
 
         if step in print_freq_lst:
             logger.info(
-                "Epoch [{:^3}/{:^3}] | Iter {:^5} | LR {:.6f} | "
-                "First {:.3f}({:.3f}) | "
-                "Total {:.3f}({:.3f})".format(
+                "Epoch [{:^3}/{:<3}] | Iter {:^5} | LR {:.6f} | "
+                "First {:^6.3f}({:^6.3f}) | "
+                "Second {:.3f}({:.3f}) | "
+                "Third {:.3f}({:.3f}) | "
+                "Total {:^6.3f}({:^6.3f})".format(
                     epoch, args.epoch,
                     step, lr,
                     first_order_loss.val, first_order_loss.avg,
+                    second_order_loss.val, second_order_loss.avg,
+                    third_order_loss.val, third_order_loss.avg,
                     losses.val, losses.avg,
                 )
             )
@@ -86,13 +117,17 @@ def train_one_epoch(
     out = losses.avg
 
     batch_end = time.time()
-    batch_times.update(batch_end - batch_start)
+    batch_times.update(batch_end-batch_start)
 
     logger.info(
-        "Epoch [{:^3}/{:^3}] | LR {:.6f} | "
+        "Val: Epoch [{:^3}/{:<3}] | "
+        "First {:.3f}({:.3f}) | "
+        "Second {:.3f}({:.3f}) | "
         "Total {:.3f}({:.3f}) | "
         "Time {:.2f}s".format(
-            epoch, args.epoch, lr,
+            epoch, args.epoch,
+            first_order_loss.val, first_order_loss.avg,
+            second_order_loss.val, second_order_loss.avg,
             losses.val, losses.avg,
             batch_times.avg,
         )
@@ -108,7 +143,7 @@ def val_one_epoch(
         epoch: int,
         metrics: object,
         args
-) -> Union[float, torch.Tensor]:
+        ) -> Union[float, torch.Tensor]:
     """
         Img    -> Model       -> dense map (H×W)
         Preds  -> LMDS        -> point list [(y, x), ...]
@@ -125,8 +160,9 @@ def val_one_epoch(
         images = images.cuda()
 
         # val results
-        outputs = model(images)
-        outputs = torch.sigmoid(outputs)
+        outputs, mu, sigma = model(images)
+        # outputs = torch.sigmoid(outputs) #
+        outputs = outputs / (1.0 + sigma) # val
 
         points = targets['points']
         labels = targets['labels']
@@ -141,7 +177,7 @@ def val_one_epoch(
         if isinstance(labels, torch.Tensor):
             labels = labels.squeeze(0).tolist()
 
-        points = np.asarray(points)  # (1, N, 2)
+        points = np.asarray(points) # (1, N, 2)
 
         # (N, 2, 1) -> (N, 2)
         if points.ndim == 3 and points.shape[-1] == 1:
@@ -149,7 +185,7 @@ def val_one_epoch(
 
         # downsample (1, N, 2) -> (N, 2)
         if points.ndim == 3 and points.shape[0] == 1:
-            points = points.squeeze(0)
+                points = points.squeeze(0)
 
         assert points.ndim == 2 and points.shape[1] == 2, \
             f"Invalid GT points shape: {points.shape}"
@@ -208,4 +244,4 @@ def val_one_epoch(
         "mAP": mAP
     }
 
-    return tmp_results  # a dict?
+    return tmp_results # a dict?

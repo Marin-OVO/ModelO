@@ -79,4 +79,12 @@
   - RDMap + FIDT: 0.4325
   - RDMap: 0.4072
   - FIDT: 0.3979
-  - PointToMask:
+  - PointToMask: 0.3998
+
+- 2026-01-16: A **group-aware head** was added to **U-Net**, supervised using **RDMap** signals.
+
+  **Details:**
+  - The auxiliary head is designed to capture collective context information based on reaction-diffusion supervision.
+
+  **Results:**
+  - F1-score: **0.4126**

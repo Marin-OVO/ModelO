@@ -1,5 +1,17 @@
 """
-    train and val
+    train and val origin .py
+
+    train/val no sigmoid, no downsample
+    Args:
+        num classes: 2
+        epoch: 150
+        batch size: 8
+        lr: 0.0003
+        optimizer: AdamW
+        lr scheduler: cosine annealing
+        PointToMask radius: 2
+        lmds kernel size: (3, 3)
+        lmds adapt ts: 0.1
 """
 import argparse
 import os
@@ -8,14 +20,14 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
-from model import UNet_
+from model import UNet
 from datasets import CrowdDataset
 from utils.metrics import PointsMetrics
 # from utils.main import train_one_epoch, val_one_epoch
-from utils.engine.engine2nd import train_one_epoch, val_one_epoch
+from utils.engine.engineO import train_one_epoch, val_one_epoch
 from utils.logger import setup_default_logging, time_str
 import albumentations as A
-from datasets.transforms import DownSample, FIDT, RD, MultiTransformsWrapper
+from datasets.transforms import PointsToMask, DownSample
 
 
 # trainval
@@ -93,7 +105,7 @@ def main(args):
         logger.info(f'{arg}: {value}')
         #logger.info('=' * 60)
 
-    model = UNet_(num_ch=3, num_class=args.num_classes, bilinear=args.bilinear)
+    model = UNet(num_ch=3, num_class=args.num_classes, bilinear=args.bilinear)
 
     # model = PointNet(in_channels=3, num_classes=args.num_classes)
     # output: (B, 2, H, W)
@@ -120,13 +132,9 @@ def main(args):
         A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
     ]
     train_end_transforms = [
-        MultiTransformsWrapper([
-        FIDT(radius=args.radius,
-             num_classes=args.num_classes,
-             down_ratio=args.ptm_down_ratio),
-        RD(num_classes=args.num_classes,
-           down_ratio=args.ptm_down_ratio, add_fidt=False, build_qs=True)
-    ])
+        PointsToMask(radius=args.radius,
+                 num_classes=args.num_classes,
+                 squeeze=False, down_ratio=args.ptm_down_ratio)
     ]
     # RD(num_classes=args.num_classes,
     #    down_ratio=args.ptm_down_ratio, add_fidt=False)

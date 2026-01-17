@@ -1,6 +1,7 @@
 """
-    2026-01-12 experiment: model
+    2026-01-15 experiment: fcos
 """
+
 import time
 from typing import Optional, Union
 
@@ -11,9 +12,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from utils.lmds import LMDS
-from .logger import *
-from .averager import *
-from .loss import *
+from utils.logger import *
+from utils.averager import *
+from utils.loss import *
 
 
 # train/val epoch: train -> FocalLoss
@@ -51,48 +52,66 @@ def train_one_epoch(
 
     lr = optimizer.param_groups[0]['lr']
 
+    loss_weights = {
+        'P2': 1.0,
+        'P3': 1.0,
+        'P4': 0.5,
+        'P5': 0.25
+    }
+
     # FocalLoss
-    criterion = FocalLoss(reduction="mean", normalize=True)
+    criterion = WithFocalLoss(alpha=2.0, beta=4.0)
     for step, (images, targets) in enumerate(train_dataloader):
 
         images = images.to(device)
+        gt_mask = targets.to(device).long() # (B, 2, H, W)
 
         # train results
-        outputs, mu, sigma = model(images)    # (B, 2, H, W) logits
+        # outputs = model(images)    # (B, 2, H, W) logits
         # outputs = torch.sigmoid(outputs)    # Must heatmap -> FocalLoss()(Now YNet -> logits)
 
-        # gs
-        y = outputs.detach()
-        noise = torch.empty_like(y).uniform_(-0.5, 0.5)
-        y_q = y + noise
+        outputs = model(images) # tensor: (B, 2, H, W)
+        
+        # init
+        loss_p2 = torch.tensor(0.0).to(device)
+        loss_p3 = torch.tensor(0.0).to(device)
+        loss_p4 = torch.tensor(0.0).to(device)
+        loss_p5 = torch.tensor(0.0).to(device)
 
-        a = ((y_q + 0.5 - mu) / (sigma + 1e-3))
-        b = ((y_q - 0.5 - mu) / (sigma + 1e-3))
+        if 'P2' in outputs:
+            outputs_p2 = torch.sigmoid(outputs['P2'])
+            loss_p2 = criterion(outputs_p2, gt_mask) * loss_weights['P2']
 
-        p = 0.5 * (
-                torch.erf(a / math.sqrt(2.0)) -
-                torch.erf(b / math.sqrt(2.0))
-        )
-        Ry = -torch.log2(p + 1e-6)
-        loss_ie = Ry.mean()
-        loss_sigma = sigma.mean()
+        if 'P3' in outputs:
+            outputs_p3 = torch.sigmoid(outputs['P3'])
+            loss_p3 = criterion(outputs_p3, gt_mask) * loss_weights['P3']
 
-        gt_mask = targets.to(device).long() # (B, 2, H, W)
+        if 'P4' in outputs:
+            outputs_p4 = torch.sigmoid(outputs['P4'])
+            loss_p4 = criterion(outputs_p4, gt_mask) * loss_weights['P4']
+
+        # if 'P5' in outputs:
+        #     outputs_p5 = torch.sigmoid(outputs['P5'])
+        #     loss_p5 = criterion(outputs_p5, gt_mask) * loss_weights['P5']
+
+        total_loss = loss_p2 + loss_p3 + loss_p4
+
+        first_order_loss.update(loss_p2.detach().cpu().item())
+        second_order_loss.update(loss_p3.detach().cpu().item())
+        third_order_loss.update(loss_p4.detach().cpu().item())
+        losses.update(total_loss.detach().cpu().item())
 
         # if gt_mask.dim() == 4:
         #     gt_mask = gt_mask.squeeze(1)
 
-        # Loss1 -> YNet(outputs loss)
-        loss = criterion(outputs, gt_mask)
-
-        scale_ie = 0.02 * loss.item() / (loss_ie.item() + 1e-8)  # 避免除0
-        scale_sigma = 0.01 * loss.item() / (loss_sigma.item() + 1e-8)
-        total_loss = loss + scale_ie * loss_ie + scale_sigma * loss_sigma
-
-        first_order_loss.update(loss.detach().cpu().item())
-        second_order_loss.update(loss_ie.detach().cpu().item())
-        third_order_loss.update(loss_sigma.detach().cpu().item())
-        losses.update(total_loss.detach().cpu().item())
+        # Loss1 -> (outputs loss)
+        # loss = WithFocalLoss(outputs, gt_mask)
+        # total_loss = loss
+        #
+        # first_order_loss.update(loss.detach().cpu().item())
+        # second_order_loss.update(0.0)
+        # third_order_loss.update(0.0)
+        # losses.update(total_loss.detach().cpu().item())
 
         optimizer.zero_grad()
         total_loss.backward()
@@ -100,11 +119,11 @@ def train_one_epoch(
 
         if step in print_freq_lst:
             logger.info(
-                "Epoch [{:^3}/{:<3}] | Iter {:^5} | LR {:.6f} | "
-                "First {:^6.3f}({:^6.3f}) | "
+                "Epoch [{:^3}/{:^3}] | Iter {:^5} | LR {:.6f} | "
+                "First {:.3f}({:.3f}) | "
                 "Second {:.3f}({:.3f}) | "
                 "Third {:.3f}({:.3f}) | "
-                "Total {:^6.3f}({:^6.3f})".format(
+                "Total {:.3f}({:.3f})".format(
                     epoch, args.epoch,
                     step, lr,
                     first_order_loss.val, first_order_loss.avg,
@@ -120,14 +139,10 @@ def train_one_epoch(
     batch_times.update(batch_end-batch_start)
 
     logger.info(
-        "Val: Epoch [{:^3}/{:<3}] | "
-        "First {:.3f}({:.3f}) | "
-        "Second {:.3f}({:.3f}) | "
+        "Epoch [{:^3}/{:^3}] | LR {:.6f} | "
         "Total {:.3f}({:.3f}) | "
         "Time {:.2f}s".format(
-            epoch, args.epoch,
-            first_order_loss.val, first_order_loss.avg,
-            second_order_loss.val, second_order_loss.avg,
+            epoch, args.epoch, lr,
             losses.val, losses.avg,
             batch_times.avg,
         )
@@ -160,9 +175,9 @@ def val_one_epoch(
         images = images.cuda()
 
         # val results
-        outputs, mu, sigma = model(images)
-        # outputs = torch.sigmoid(outputs) #
-        outputs = outputs / (1.0 + sigma) # val
+        outputs = model(images)
+        outputs = outputs['final'] # (B, C, H/8, W/8)
+        outputs = torch.sigmoid(outputs)
 
         points = targets['points']
         labels = targets['labels']

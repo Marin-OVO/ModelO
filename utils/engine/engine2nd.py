@@ -1,7 +1,6 @@
 """
-    2026-01-15 experiment: fcos
+    2026-01-16 experiment: test(U-Net add a det-head)
 """
-
 import time
 from typing import Optional, Union
 
@@ -12,9 +11,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from utils.lmds import LMDS
-from .logger import *
-from .averager import *
-from .loss import *
+from utils.logger import *
+from utils.averager import *
+from utils.loss import *
 
 
 # train/val epoch: train -> FocalLoss
@@ -28,7 +27,7 @@ def train_one_epoch(
         logger: logging.Logger,
         print_freq: int,
         args,
-        ) -> float:
+) -> float:
     """
         Img   -> Model        -> dense map  (H×W)
         GT    -> PointsToMask -> dense mask (H×W)
@@ -37,7 +36,6 @@ def train_one_epoch(
     # metric indicators
     first_order_loss = AverageMeter(20)
     second_order_loss = AverageMeter(20)
-    third_order_loss = AverageMeter(20)
     losses = AverageMeter(20)
     batch_times = AverageMeter(20)
 
@@ -52,66 +50,31 @@ def train_one_epoch(
 
     lr = optimizer.param_groups[0]['lr']
 
-    loss_weights = {
-        'P2': 1.0,
-        'P3': 1.0,
-        'P4': 0.5,
-        'P5': 0.25
-    }
-
     # FocalLoss
     criterion = WithFocalLoss(alpha=2.0, beta=4.0)
     for step, (images, targets) in enumerate(train_dataloader):
 
         images = images.to(device)
-        gt_mask = targets.to(device).long() # (B, 2, H, W)
+        fidt_map, qs_map = targets
+        fidt_map = fidt_map.to(device)
+        qs_map = qs_map.to(device)
 
         # train results
-        # outputs = model(images)    # (B, 2, H, W) logits
-        # outputs = torch.sigmoid(outputs)    # Must heatmap -> FocalLoss()(Now YNet -> logits)
+        outputs = model(images)             # (B, 2, H, W) logits
 
-        outputs = model(images) # tensor: (B, 2, H, W)
-        
-        # init
-        loss_p2 = torch.tensor(0.0).to(device)
-        loss_p3 = torch.tensor(0.0).to(device)
-        loss_p4 = torch.tensor(0.0).to(device)
-        loss_p5 = torch.tensor(0.0).to(device)
+        outputs_cls = outputs['logits']
+        outputs_qs = outputs['qs_logits']
 
-        if 'P2' in outputs:
-            outputs_p2 = torch.sigmoid(outputs['P2'])
-            loss_p2 = criterion(outputs_p2, gt_mask) * loss_weights['P2']
+        outputs_cls = torch.sigmoid(outputs_cls)    # Must heatmap -> FocalLoss()(Now YNet -> logits)
 
-        if 'P3' in outputs:
-            outputs_p3 = torch.sigmoid(outputs['P3'])
-            loss_p3 = criterion(outputs_p3, gt_mask) * loss_weights['P3']
+        cls_loss = criterion(outputs_cls, fidt_map)
+        qs_loss = F.l1_loss(outputs_qs, qs_map)
 
-        if 'P4' in outputs:
-            outputs_p4 = torch.sigmoid(outputs['P4'])
-            loss_p4 = criterion(outputs_p4, gt_mask) * loss_weights['P4']
+        total_loss = cls_loss + 0.1 * qs_loss
 
-        # if 'P5' in outputs:
-        #     outputs_p5 = torch.sigmoid(outputs['P5'])
-        #     loss_p5 = criterion(outputs_p5, gt_mask) * loss_weights['P5']
-
-        total_loss = loss_p2 + loss_p3 + loss_p4
-
-        first_order_loss.update(loss_p2.detach().cpu().item())
-        second_order_loss.update(loss_p3.detach().cpu().item())
-        third_order_loss.update(loss_p4.detach().cpu().item())
+        first_order_loss.update(cls_loss.detach().cpu().item())
+        second_order_loss.update(qs_loss.detach().cpu().item())
         losses.update(total_loss.detach().cpu().item())
-
-        # if gt_mask.dim() == 4:
-        #     gt_mask = gt_mask.squeeze(1)
-
-        # Loss1 -> (outputs loss)
-        # loss = WithFocalLoss(outputs, gt_mask)
-        # total_loss = loss
-        #
-        # first_order_loss.update(loss.detach().cpu().item())
-        # second_order_loss.update(0.0)
-        # third_order_loss.update(0.0)
-        # losses.update(total_loss.detach().cpu().item())
 
         optimizer.zero_grad()
         total_loss.backward()
@@ -122,13 +85,11 @@ def train_one_epoch(
                 "Epoch [{:^3}/{:^3}] | Iter {:^5} | LR {:.6f} | "
                 "First {:.3f}({:.3f}) | "
                 "Second {:.3f}({:.3f}) | "
-                "Third {:.3f}({:.3f}) | "
                 "Total {:.3f}({:.3f})".format(
                     epoch, args.epoch,
                     step, lr,
                     first_order_loss.val, first_order_loss.avg,
                     second_order_loss.val, second_order_loss.avg,
-                    third_order_loss.val, third_order_loss.avg,
                     losses.val, losses.avg,
                 )
             )
@@ -136,7 +97,7 @@ def train_one_epoch(
     out = losses.avg
 
     batch_end = time.time()
-    batch_times.update(batch_end-batch_start)
+    batch_times.update(batch_end - batch_start)
 
     logger.info(
         "Epoch [{:^3}/{:^3}] | LR {:.6f} | "
@@ -158,7 +119,7 @@ def val_one_epoch(
         epoch: int,
         metrics: object,
         args
-        ) -> Union[float, torch.Tensor]:
+) -> Union[float, torch.Tensor]:
     """
         Img    -> Model       -> dense map (H×W)
         Preds  -> LMDS        -> point list [(y, x), ...]
@@ -176,7 +137,7 @@ def val_one_epoch(
 
         # val results
         outputs = model(images)
-        outputs = outputs['final'] # (B, C, H/8, W/8)
+        outputs = outputs['logits']
         outputs = torch.sigmoid(outputs)
 
         points = targets['points']
@@ -192,7 +153,7 @@ def val_one_epoch(
         if isinstance(labels, torch.Tensor):
             labels = labels.squeeze(0).tolist()
 
-        points = np.asarray(points) # (1, N, 2)
+        points = np.asarray(points)  # (1, N, 2)
 
         # (N, 2, 1) -> (N, 2)
         if points.ndim == 3 and points.shape[-1] == 1:
@@ -200,7 +161,7 @@ def val_one_epoch(
 
         # downsample (1, N, 2) -> (N, 2)
         if points.ndim == 3 and points.shape[0] == 1:
-                points = points.squeeze(0)
+            points = points.squeeze(0)
 
         assert points.ndim == 2 and points.shape[1] == 2, \
             f"Invalid GT points shape: {points.shape}"
@@ -259,4 +220,4 @@ def val_one_epoch(
         "mAP": mAP
     }
 
-    return tmp_results # a dict?
+    return tmp_results  # a dict?
