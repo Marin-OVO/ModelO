@@ -6,9 +6,43 @@ from typing import Optional
 LOSSES = Registry('losses')
 
 
-# heatmap (B, C, H, W)
-# GT     -> dense mask [0, 1]
-# output -> heatmap [0, 1] **not logits
+def build_gt_offset(gt_points, H, W, radius, device, stride: int = 1):
+    gt_offset = torch.zeros(2, H, W, device=device)
+    gt_mask = torch.zeros(H, W, device=device)
+
+    if isinstance(gt_points, list) and len(gt_points) > 0:
+        if isinstance(gt_points[0], torch.Tensor):
+            points = gt_points[0]
+        else:
+            points = gt_points
+    else:
+        points = gt_points
+
+    if isinstance(points, torch.Tensor):
+        points = points.to(device)
+
+    for (x, y) in points:
+        x = x.item() if isinstance(x, torch.Tensor) else x
+        y = y.item() if isinstance(y, torch.Tensor) else y
+
+        cx = x / stride
+        cy = y / stride
+
+        cx_int = int(cx)
+        cy_int = int(cy)
+
+        for iy in range(cy_int - radius, cy_int + radius + 1):
+            for ix in range(cx_int - radius, cx_int + radius + 1):
+                if ix < 0 or iy < 0 or ix >= W or iy >= H:
+                    continue
+
+                gt_offset[0, iy, ix] = cx - ix
+                gt_offset[1, iy, ix] = cy - iy
+                gt_mask[iy, ix] = 1.0
+
+    return gt_offset, gt_mask
+
+
 @LOSSES.register()
 class FocalLoss(torch.nn.Module):
 
@@ -119,9 +153,6 @@ class WithFocalLoss(nn.Module):
 
         pos_inds = target.eq(1).float()
         neg_inds = target.lt(1).float()
-        # tau = 0.95
-        # pos_inds = (target > tau).float()
-        # neg_inds = (target <= tau).float()
 
         neg_weights = torch.pow(1 - target, self.beta)
 

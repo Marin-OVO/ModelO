@@ -11,7 +11,6 @@ from torch.utils.data import DataLoader
 from model import UNet
 from datasets import CrowdDataset
 from utils.metrics import PointsMetrics
-# from utils.main import train_one_epoch, val_one_epoch
 from utils.engine.engineO import train_one_epoch, val_one_epoch
 from utils.logger import setup_default_logging, time_str
 import albumentations as A
@@ -28,7 +27,7 @@ def args_parser():
 
     # training parameters
     parser.add_argument('--epoch', default=150, type=int, metavar='N')
-    parser.add_argument('--batch_size', default=8, type=int, metavar='N')
+    parser.add_argument('--batch_size', default=1, type=int, metavar='N')
     parser.add_argument('--lr', default=0.0003, type=float)
     parser.add_argument('--weight_decay', default=1e-4, type=float)
     parser.add_argument('--num_worker', default=6, type=int)
@@ -55,7 +54,7 @@ def args_parser():
     parser.add_argument('--radius', default=2, type=int)
     parser.add_argument('--ptm_down_ratio', default=1, type=int)
     parser.add_argument('--lmds_kernel_size', default=3, type=int)
-    parser.add_argument('--lmds_adapt_ts', default=0.1, type=float)
+    parser.add_argument('--lmds_adapt_ts', default=0.3, type=float)
     parser.add_argument('--ds_down_ratio', default=1, type=int)
     parser.add_argument('--ds_crowd_type', default='point', type=str)
 

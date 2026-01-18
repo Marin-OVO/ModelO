@@ -2,22 +2,30 @@
     unet
 """
 from .conv import *
+from .head import OffsetHead, DensityHead
 
 
 class UNet_(nn.Module):
     """
         U-Shape, down then up
+        
         Args:
-            num_ch: num channels
+            in_channels: num channels
             num_class: num classes
+        Return:
+            Dict {
+            'heatmap_out': heatmap_out, (B, 2, H, W)
+            'offset_out': offset_out,   (B, 2, H, W)
+            'density_out': density_out  (B, 1, H, W)
+            }
     """
-    def __init__(self, num_ch, num_class=2, bilinear=False):
+    def __init__(self, in_channels, num_class=2, bilinear=False):
         super(UNet_, self).__init__()
-        self.n_channels = num_ch
-        self.n_classes = num_class
+        self.in_channels = in_channels
+        self.out_channels = num_class
         self.bilinear = bilinear
 
-        self.inc = (DoubleConv(num_ch, 64))
+        self.inc = (DoubleConv(in_channels, 64))
         self.down1 = (DownScaling(64, 128))
         self.down2 = (DownScaling(128, 256))
         self.down3 = (DownScaling(256, 512))
@@ -28,35 +36,31 @@ class UNet_(nn.Module):
         self.up2 = (UpScaling(512, 256 // factor, bilinear))
         self.up3 = (UpScaling(256, 128 // factor, bilinear))
         self.up4 = (UpScaling(128, 64, bilinear))
-        self.outc = (OutConv(64, num_class))
 
-        self.qs_head = nn.Sequential(
-            nn.Conv2d(64, 32, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(32, 1, kernel_size=1),
-            nn.Sigmoid()
-        )
+        self.heatmap_head = (OutConv(64, num_class))
+        self.offset_head = OffsetHead(in_channels=64, hidden_channels=128, out_channels=2)
+        self.density_head = DensityHead(in_channels=64, hidden_channels=128, out_channels=1)
 
     def forward(self, x):
-        # 编码器
         x1 = self.inc(x)
         x2 = self.down1(x1)
         x3 = self.down2(x2)
         x4 = self.down3(x3)
         x5 = self.down4(x4)
 
-        # 解码器
         x = self.up1(x5, x4)
         x = self.up2(x, x3)
         x = self.up3(x, x2)
         x = self.up4(x, x1)
-        logits = self.outc(x)
 
-        qs_logits = self.qs_head(x)
+        heatmap_out = self.heatmap_head(x)
+        offset_out = self.offset_head(x)
+        density_out = self.density_head(x)
 
         return {
-            'logits': logits,
-            'qs_logits': qs_logits
+            'heatmap_out': heatmap_out,
+            'offset_out': offset_out,
+            'density_out': density_out
         }
 
     def use_checkpointing(self):
@@ -69,5 +73,3 @@ class UNet_(nn.Module):
         self.up2 = torch.utils.checkpoint(self.up2)
         self.up3 = torch.utils.checkpoint(self.up3)
         self.up4 = torch.utils.checkpoint(self.up4)
-        self.outc = torch.utils.checkpoint(self.outc)
-        self.outc = torch.utils.checkpoint(self.qs_head)

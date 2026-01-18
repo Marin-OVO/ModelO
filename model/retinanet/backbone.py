@@ -8,7 +8,7 @@ from .fpn import BackboneWithFPN, LastLevelMaxPool
 class Bottleneck(nn.Module):
     """
         Pipeline: conv1x1, bn, relu -> conv3x3, bn, relu -> conv1x1, bn, res, relu
-        Channel: in_channels -> out_channels -> out_channels * expansion
+        Channel: in_channels -> hidden_channels -> hidden_channels * expansion
         Size: size -> size/s -> size/s
     """
     expansion = 4

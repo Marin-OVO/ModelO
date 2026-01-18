@@ -1,5 +1,5 @@
 """
-    2026-01-18 experiment: count then loc
+    2026-01-15 experiment: fcos
 """
 import time
 from typing import Optional, Union
@@ -15,9 +15,9 @@ from utils.logger import *
 from utils.averager import *
 from utils.loss import *
 
-from torch.cuda.amp import autocast, GradScaler
 
-
+# train/val epoch: train -> FocalLoss
+#                  val   -> LMDS
 def train_one_epoch(
         model: torch.nn.Module,
         train_dataloader: torch.utils.data.DataLoader,
@@ -27,17 +27,20 @@ def train_one_epoch(
         logger: logging.Logger,
         print_freq: int,
         args,
-        ) -> float:
-    scaler = GradScaler()
-    # init
+) -> float:
+    """
+        Img   -> Model        -> dense map  (H×W)
+        GT    -> PointsToMask -> dense mask (H×W)
+        Loss  -> FocalLoss(map, mask)
+    """
+    # metric indicators
     first_order_loss = AverageMeter(20)
     second_order_loss = AverageMeter(20)
     third_order_loss = AverageMeter(20)
-    forth_order_loss = AverageMeter(20)
-    fifth_order_loss = AverageMeter(20)
     losses = AverageMeter(20)
     batch_times = AverageMeter(20)
 
+    # print freq 8 times for a epoch
     freq = len(train_dataloader) // print_freq
     print_freq_lst = [i * freq for i in range(1, 8)]
     print_freq_lst.append(len(train_dataloader) - 1)
@@ -45,75 +48,73 @@ def train_one_epoch(
     batch_start = time.time()
 
     model.train()
+
     lr = optimizer.param_groups[0]['lr']
 
+    loss_weights = {
+        'P2': 1.0,
+        'P3': 1.0,
+        'P4': 0.5,
+        'P5': 0.25
+    }
+
     # FocalLoss
-    # FL = FocalLoss(reduction='mean', normalize=True)
-    FL = WithFocalLoss(alpha=2.0, beta=4.0)
+    criterion = WithFocalLoss(alpha=2.0, beta=4.0)
     for step, (images, targets) in enumerate(train_dataloader):
 
-        # img
         images = images.to(device)
+        gt_mask = targets.to(device).long()  # (B, 2, H, W)
 
-        with autocast():
-            # train outputs
-            outputs = model(images)  # dict
-            heatmap_out = outputs['heatmap_out']
-            offset_out = outputs['offset_out']
-            density_out = outputs['density_out']
+        # train results
+        # outputs = model(images)    # (B, 2, H, W) logits
+        # outputs = torch.sigmoid(outputs)    # Must heatmap -> FocalLoss()(Now YNet -> logits)
 
-            # mask
-            _, _, H, W = offset_out.shape
-            gt_heatmap = targets['fidt_map'].to(device)
-            gt_dense_map = targets['density_map'].to(device)
-            gt_points = targets['points']
+        outputs = model(images)  # tensor: (B, 2, H, W)
 
-            gt_offset, gt_mask = build_gt_offset(
-                gt_points, H, W,
-                radius=args.radius,
-                device=args.device,
-                stride=1
-            )
-            gt_offset = gt_offset.to(device)
-            gt_mask = gt_mask.to(device)
+        # init
+        loss_p2 = torch.tensor(0.0).to(device)
+        loss_p3 = torch.tensor(0.0).to(device)
+        loss_p4 = torch.tensor(0.0).to(device)
+        loss_p5 = torch.tensor(0.0).to(device)
 
-            gt_offset = gt_offset.unsqueeze(0)
-            gt_mask = gt_mask.unsqueeze(0).unsqueeze(0)
+        if 'P2' in outputs:
+            outputs_p2 = torch.sigmoid(outputs['P2'])
+            loss_p2 = criterion(outputs_p2, gt_mask) * loss_weights['P2']
 
-            # lmds
-            ks = args.lmds_kernel_size
-            if isinstance(ks, int):
-                ks = (ks, ks)
-            lmds = LMDS(
-                kernel_size=ks,
-                adapt_ts=args.lmds_adapt_ts
-            )
-            counts, _, _, _ = lmds(outputs['heatmap_out'])
-            counts = torch.tensor(
-                counts[0][0],
-                device=density_out.device,
-                dtype=density_out.dtype
-            )
+        if 'P3' in outputs:
+            outputs_p3 = torch.sigmoid(outputs['P3'])
+            loss_p3 = criterion(outputs_p3, gt_mask) * loss_weights['P3']
 
-            # loss
-            heatmap_loss = FL(heatmap_out, gt_heatmap)
-            offset_loss = (F.smooth_l1_loss(offset_out, gt_offset, reduction='none') * gt_mask).sum() / (gt_mask.sum() + 1e-6)
-            density_loss = F.mse_loss(density_out, gt_dense_map)
-            cons_loss = F.l1_loss(density_out.sum(), counts)
+        if 'P4' in outputs:
+            outputs_p4 = torch.sigmoid(outputs['P4'])
+            loss_p4 = criterion(outputs_p4, gt_mask) * loss_weights['P4']
 
-            total_loss = heatmap_loss + offset_loss + density_loss + 0.001 * cons_loss
+        # if 'P5' in outputs:
+        #     outputs_p5 = torch.sigmoid(outputs['P5'])
+        #     loss_p5 = criterion(outputs_p5, gt_mask) * loss_weights['P5']
 
-        first_order_loss.update(heatmap_loss.detach().cpu().item())
-        second_order_loss.update(offset_loss.detach().cpu().item())
-        third_order_loss.update(density_loss.detach().cpu().item())
-        forth_order_loss.update(cons_loss.detach().cpu().item())
-        fifth_order_loss.update(0.0)
+        total_loss = loss_p2 + loss_p3 + loss_p4
+
+        first_order_loss.update(loss_p2.detach().cpu().item())
+        second_order_loss.update(loss_p3.detach().cpu().item())
+        third_order_loss.update(loss_p4.detach().cpu().item())
         losses.update(total_loss.detach().cpu().item())
 
+        # if gt_mask.dim() == 4:
+        #     gt_mask = gt_mask.squeeze(1)
+
+        # Loss1 -> (outputs loss)
+        # loss = WithFocalLoss(outputs, gt_mask)
+        # total_loss = loss
+        #
+        # first_order_loss.update(loss.detach().cpu().item())
+        # second_order_loss.update(0.0)
+        # third_order_loss.update(0.0)
+        # losses.update(total_loss.detach().cpu().item())
+
         optimizer.zero_grad()
-        scaler.scale(total_loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
+        total_loss.backward()
+        optimizer.step()
 
         if step in print_freq_lst:
             logger.info(
@@ -121,14 +122,12 @@ def train_one_epoch(
                 "First {:.3f}({:.3f}) | "
                 "Second {:.3f}({:.3f}) | "
                 "Third {:.3f}({:.3f}) | "
-                "Forth {:.3f}({:.3f}) | "
                 "Total {:.3f}({:.3f})".format(
                     epoch, args.epoch,
                     step, lr,
                     first_order_loss.val, first_order_loss.avg,
                     second_order_loss.val, second_order_loss.avg,
                     third_order_loss.val, third_order_loss.avg,
-                    forth_order_loss.val, forth_order_loss.avg,
                     losses.val, losses.avg,
                 )
             )
@@ -136,7 +135,7 @@ def train_one_epoch(
     out = losses.avg
 
     batch_end = time.time()
-    batch_times.update(batch_end-batch_start)
+    batch_times.update(batch_end - batch_start)
 
     logger.info(
         "Epoch [{:^3}/{:^3}] | LR {:.6f} | "
@@ -158,9 +157,15 @@ def val_one_epoch(
         epoch: int,
         metrics: object,
         args
-        ) -> Union[float, torch.Tensor]:
-
+) -> Union[float, torch.Tensor]:
+    """
+        Img    -> Model       -> dense map (H×W)
+        Preds  -> LMDS        -> point list [(y, x), ...]
+        GT     -> points list -> [(y, x), ...](N, 2)
+        Metric -> mAP / recall / precision
+    """
     metrics.flush()
+
     iter_metrics = metrics.copy()
 
     model.eval()
@@ -168,16 +173,25 @@ def val_one_epoch(
     for step, (images, targets) in enumerate(val_dataloader):
         images = images.cuda()
 
-        # val outputs
+        # val results
         outputs = model(images)
+        outputs = outputs['final']  # (B, C, H/8, W/8)
+        outputs = torch.sigmoid(outputs)
 
         points = targets['points']
         labels = targets['labels']
 
+        # if step == 0:
+        #     print(type(points))
+        #     print(np.array(points).shape)
+
+        # if isinstance(points, torch.Tensor):
+        #     points = points.squeeze(0).tolist()
+
         if isinstance(labels, torch.Tensor):
             labels = labels.squeeze(0).tolist()
 
-        points = np.asarray(points) # (1, N, 2)
+        points = np.asarray(points)  # (1, N, 2)
 
         # (N, 2, 1) -> (N, 2)
         if points.ndim == 3 and points.shape[-1] == 1:
@@ -185,7 +199,7 @@ def val_one_epoch(
 
         # downsample (1, N, 2) -> (N, 2)
         if points.ndim == 3 and points.shape[0] == 1:
-                points = points.squeeze(0)
+            points = points.squeeze(0)
 
         assert points.ndim == 2 and points.shape[1] == 2, \
             f"Invalid GT points shape: {points.shape}"
@@ -208,7 +222,7 @@ def val_one_epoch(
             adapt_ts=args.lmds_adapt_ts
         )
 
-        counts, locs, labels, scores = lmds(outputs['heatmap_out'])
+        counts, locs, labels, scores = lmds(outputs)
 
         locs_pred = np.asarray(locs[0])
         if locs_pred.ndim == 3 and locs_pred.shape[-1] == 1:
@@ -244,4 +258,4 @@ def val_one_epoch(
         "mAP": mAP
     }
 
-    return tmp_results # a dict?
+    return tmp_results  # a dict?

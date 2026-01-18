@@ -75,11 +75,11 @@
   - Fusion formulation:  
     `FIDT(x) * (1 / (eps + 1 + λ * Gds))`
 
-  **Results (F1-score):**
-  - RDMap + FIDT: 0.4325
-  - RDMap: 0.4072
+  **Results (F1-score):**(all sigmoid / no sigmoid)
+  - RDMap + FIDT: 0.4325 0.4430
+  - RDMap: 0.4072 0.4857
   - FIDT: 0.3979
-  - PointToMask: 0.3998
+  - PointToMask: 0.3998 0.5631
 
 - 2026-01-16: A **group-aware head** was added to **U-Net**, supervised using **RDMap** signals.
 
@@ -88,3 +88,5 @@
 
   **Results:**
   - F1-score: **0.4126**
+
+- 2026-01-17: A new idea was proposed to combine **heatmap** and **dense map** in a unified processing pipeline for crowd representation.

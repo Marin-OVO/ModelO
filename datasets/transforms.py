@@ -19,26 +19,27 @@ __all__ = ['TRANSFORMS', *TRANSFORMS.registry_names]
 def _point_buffer(x: int, y: int, mask: torch.Tensor, radius: int) -> torch.Tensor:
     x_t, y_t = torch.arange(0, mask.size(1)), torch.arange(0, mask.size(0))
     buffer = (x_t.unsqueeze(0) - x) ** 2 + (y_t.unsqueeze(1) - y) ** 2 < radius ** 2
+
     return buffer
 
-def gaussian_blur_torch(x: torch.Tensor, sigma: float) -> torch.Tensor:
-    """
-        x: (1, 1, H, W)
-    """
-    radius = int(3 * sigma)
-    size = 2 * radius + 1
-
-    coords = torch.arange(size, device=x.device) - radius
-    kernel = torch.exp(-(coords ** 2) / (2 * sigma ** 2))
-    kernel = kernel / kernel.sum()
-
-    kernel_x = kernel.view(1, 1, 1, -1)
-    kernel_y = kernel.view(1, 1, -1, 1)
-
-    x = F.conv2d(x, kernel_x, padding=(0, radius))
-    x = F.conv2d(x, kernel_y, padding=(radius, 0))
-
-    return x
+# def gaussian_blur_torch(x: torch.Tensor, sigma: float) -> torch.Tensor:
+#     """
+#         x: (1, 1, H, W)
+#     """
+#     radius = int(3 * sigma)
+#     size = 2 * radius + 1
+#
+#     coords = torch.arange(size, device=x.device) - radius
+#     kernel = torch.exp(-(coords ** 2) / (2 * sigma ** 2))
+#     kernel = kernel / kernel.sum()
+#
+#     kernel_x = kernel.view(1, 1, 1, -1)
+#     kernel_y = kernel.view(1, 1, -1, 1)
+#
+#     x = F.conv2d(x, kernel_x, padding=(0, radius))
+#     x = F.conv2d(x, kernel_y, padding=(radius, 0))
+#
+#     return x
 
 
 @TRANSFORMS.register()
@@ -420,259 +421,367 @@ class FIDT:
         return output
 
 
-class RD:
+@TRANSFORMS.register()
+class DensityMap:
     """
-        Reaction–Diffusion based GT generator
+        Convert point annotations into Gaussian density map.
+
+        Each Gaussian kernel is explicitly normalized such that:
+            sum(kernel) = 1
+
+        Therefore:
+            sum(density_map) = number of points
+
+        This transform is intended ONLY for counting supervision.
     """
     def __init__(
         self,
-        sigma_base: float=2.5,
-        sigma_density: float=3.0,
-        lambda_inhibit: float=0.4,
-        gamma: float = 1.0,
-        num_classes: int = 2,
-        add_bg: bool = False,
-        down_ratio: int = None,
-        add_fidt: bool = False,
-        fidt_alpha: float = 0.02,
-        fidt_beta: float = 0.75,
-        build_qs: bool = False,
-        sigma_qs: float = 8.0,
-    ) -> None: # 2.5, 3.0, 0.4, 1.0
-        self.sigma_base = sigma_base
-        self.sigma_density = sigma_density
-        self.lambda_inhibit = lambda_inhibit
-        self.gamma = gamma
-        self.num_classes = num_classes - 1
-        self.add_bg = add_bg
+        sigma: float = 4.0,
+        down_ratio: Optional[int] = None
+    ) -> None:
+        """
+            Args:
+                sigma (float): standard deviation of Gaussian kernel
+                down_ratio (int, optional): downsample ratio for density map
+        """
+        self.sigma = sigma
         self.down_ratio = down_ratio
-        self.add_fidt = add_fidt
-        self.fidt_alpha = fidt_alpha
-        self.fidt_beta = fidt_beta
-
-        self.build_qs = build_qs
-        self.sigma_qs = sigma_qs
 
     def __call__(
         self,
         image: Union[PIL.Image.Image, torch.Tensor],
-        target: Dict[str, torch.Tensor],
+        target: Dict[str, torch.Tensor]
     ) -> Tuple[torch.Tensor, torch.Tensor]:
 
         if isinstance(image, PIL.Image.Image):
             image = torchvision.transforms.ToTensor()(image)
 
-        self.img_height, self.img_width = image.size(1), image.size(2)
+        H, W = image.size(1), image.size(2)
+
         if self.down_ratio is not None:
-            self.img_height = self.img_height // self.down_ratio
-            self.img_width = self.img_width // self.down_ratio
-            _, target = DownSample(down_ratio=self.down_ratio, crowd_type='point')(
-                image, target.copy()
-            )
+            H = H // self.down_ratio
+            W = W // self.down_ratio
+            _, target = DownSample(
+                down_ratio=self.down_ratio,
+                crowd_type='point'
+            )(image, target.copy())
 
-        if self.add_fidt:
-            all_maps = []
-            device = target["points"].device if "points" in target else torch.device("cpu")
-            for cls in range(self.num_classes):
-                cls_points = target["points"][target["labels"] == (cls + 1)]
-                hybrid_map = self._hybrid_transform(cls_points, device)
-                all_maps.append(hybrid_map)
-            rd_map = torch.stack(all_maps, dim=0) if self.num_classes > 1 else all_maps[0].unsqueeze(0)
-        else:
-            if self.num_classes == 1:
-                new_target = target.copy()
-                new_target["labels"] = torch.ones_like(target["labels"])
-                rd_map = self._onehot(new_target)
-            else:
-                rd_map = self._onehot(target)
+        density_map = torch.zeros((1, H, W), dtype=torch.float32)
 
-        if self.add_bg:
-            rd_map = self._add_background(rd_map)
+        if len(target['points']) > 0:
+            for point in target['points']:
+                x, y = int(point[0]), int(point[1])
+                self._add_gaussian(density_map[0], x, y)
 
-        rd_map = rd_map.type(image.type())
+        return image, density_map.type(image.type())
 
-        if self.build_qs:
-            if self.num_classes == 1:
-                qs_map = self._build_qs_gt(
-                    target["points"],
-                    self.img_height,
-                    self.img_width,
-                    self.sigma_qs
-                )
-            else:
-                qs_maps = []
-                device = target["points"].device
-                for cls in range(self.num_classes):
-                    cls_points = target["points"][target["labels"] == (cls + 1)]
-                    qs_map_cls = self._build_qs_gt(
-                        cls_points,
-                        self.img_height,
-                        self.img_width,
-                        self.sigma_qs
-                    )
-                    qs_maps.append(qs_map_cls)
-                qs_map = torch.cat(qs_maps, dim=0) if len(qs_maps) > 1 else qs_maps[0]
-
-            qs_map = qs_map.type(image.type())
-            return image, qs_map
-
-        return image, rd_map
-
-    def _onehot(self, target: Dict[str, torch.Tensor]) -> torch.Tensor:
+    def _add_gaussian(self, density: torch.Tensor, x: int, y: int):
         """
-            Generate RD rd_map per class
+            Add a normalized 2D Gaussian centered at (x, y)
         """
-        device = target["points"].device
-        rd_map = torch.zeros(
-            (self.num_classes, self.img_height, self.img_width),
-            device=device,
+
+        H, W = density.shape
+        radius = int(3 * self.sigma)
+        size = 2 * radius + 1
+
+        yy, xx = torch.meshgrid(
+            torch.arange(size),
+            torch.arange(size),
+            indexing='ij'
         )
 
-        if len(target["points"]) == 0:
-            return rd_map
+        cy = cx = radius
+        gaussian = torch.exp(
+            -((xx - cx) ** 2 + (yy - cy) ** 2) / (2 * self.sigma ** 2)
+        )
 
-        for cls in range(self.num_classes):
-            cls_points = target["points"][target["labels"] == (cls + 1)]
-            if len(cls_points) == 0:
-                continue
+        gaussian = gaussian / gaussian.sum()
 
-            rd_map[cls] = self._reaction_diffusion(cls_points, device)
+        x1 = max(0, x - radius)
+        y1 = max(0, y - radius)
+        x2 = min(W, x + radius + 1)
+        y2 = min(H, y + radius + 1)
 
-        return rd_map
+        gx1 = radius - (x - x1)
+        gy1 = radius - (y - y1)
+        gx2 = gx1 + (x2 - x1)
+        gy2 = gy1 + (y2 - y1)
 
-    def _reaction_diffusion(
-        self,
-        points: torch.Tensor,
-        device: torch.device,
-    ) -> torch.Tensor:
-        """
-            Core RD formulation:
-            u = G_base(S) / (1 + λ * G_density(S))
-        """
-        # S(x)
-        S = torch.zeros((1, 1, self.img_height, self.img_width), device=device)
-        indices_y = points[:, 1].long().clamp(0, self.img_height - 1)
-        indices_x = points[:, 0].long().clamp(0, self.img_width - 1)
-        S.view(-1).put_(indices_y * self.img_width + indices_x,
-                        torch.ones(len(points), device=device), accumulate=True)
+        density[y1:y2, x1:x2] += gaussian[gy1:gy2, gx1:gx2]
 
-        # GdS = Gd * S(x)
-        GdS = gaussian_blur_torch(S, self.sigma_density)
-        # GbS = Gb * S(x)
-        GbS = gaussian_blur_torch(S, self.sigma_base)
 
-        # U = Gb * S(x) / (1 + lambda * Gd * S(x))
-        # U = Gb * S(x) / (eps + 1.0 + lambda * Gd * S(x))
-        # U = Gb * S(x) / (eps + Gb * S(x) + lambda * Gd * S(x))
-        u = GbS / (1.0 + self.lambda_inhibit * GdS + 1e-6)
+class CustomTransformWrapper:
+    def __init__(self, fidt_transform, density_transform):
+        self.fidt_transform = fidt_transform
+        self.density_transform = density_transform
 
-        u = u / (u.max() + 1e-7)
-        u = torch.pow(u, self.gamma)
-        u = torch.max(u, S)
+    def __call__(self, image, target):
+        original_points = target['points'].clone()
 
-        return u.squeeze(0)
+        img1, fidt_map = self.fidt_transform(image, target)
+        img2, density_map = self.density_transform(image, target)
 
-    def _add_background(self, heatmap: torch.Tensor) -> torch.Tensor:
-        background = torch.ones((1, *heatmap.shape[1:]), device=heatmap.device)
-        merged = heatmap.sum(dim=0, keepdim=True)
-        background = torch.clamp(background - merged, min=0.0)
+        return img1, {
+            'fidt_map': fidt_map,
+            'density_map': density_map,
+            'points': original_points
+        }
 
-        return torch.cat((background, heatmap), dim=0)
 
-    def _hybrid_transform(
-            self,
-            points: torch.Tensor,
-            device: torch.device,
-    ) -> torch.Tensor:
-        """
-            Hybrid RD + FIDT transform
-            Uses FIDT implementation consistent with FIDT class
-        """
-        H, W = self.img_height, self.img_width
+# class RD:
+#     """
+#         Reaction–Diffusion based GT generator
+#     """
+#     def __init__(
+#         self,
+#         sigma_base: float=2.5,
+#         sigma_density: float=3.0,
+#         lambda_inhibit: float=0.4,
+#         gamma: float = 1.0,
+#         num_classes: int = 2,
+#         add_bg: bool = False,
+#         down_ratio: int = None,
+#         add_fidt: bool = False,
+#         fidt_alpha: float = 0.02,
+#         fidt_beta: float = 0.75,
+#         build_qs: bool = False,
+#         sigma_qs: float = 8.0,
+#     ) -> None: # 2.5, 3.0, 0.4, 1.0
+#         self.sigma_base = sigma_base
+#         self.sigma_density = sigma_density
+#         self.lambda_inhibit = lambda_inhibit
+#         self.gamma = gamma
+#         self.num_classes = num_classes - 1
+#         self.add_bg = add_bg
+#         self.down_ratio = down_ratio
+#         self.add_fidt = add_fidt
+#         self.fidt_alpha = fidt_alpha
+#         self.fidt_beta = fidt_beta
+#
+#         self.build_qs = build_qs
+#         self.sigma_qs = sigma_qs
+#
+#     def __call__(
+#         self,
+#         image: Union[PIL.Image.Image, torch.Tensor],
+#         target: Dict[str, torch.Tensor],
+#     ) -> Tuple[torch.Tensor, torch.Tensor]:
+#
+#         if isinstance(image, PIL.Image.Image):
+#             image = torchvision.transforms.ToTensor()(image)
+#
+#         self.img_height, self.img_width = image.size(1), image.size(2)
+#         if self.down_ratio is not None:
+#             self.img_height = self.img_height // self.down_ratio
+#             self.img_width = self.img_width // self.down_ratio
+#             _, target = DownSample(down_ratio=self.down_ratio, crowd_type='point')(
+#                 image, target.copy()
+#             )
+#
+#         if self.add_fidt:
+#             all_maps = []
+#             device = target["points"].device if "points" in target else torch.device("cpu")
+#             for cls in range(self.num_classes):
+#                 cls_points = target["points"][target["labels"] == (cls + 1)]
+#                 hybrid_map = self._hybrid_transform(cls_points, device)
+#                 all_maps.append(hybrid_map)
+#             rd_map = torch.stack(all_maps, dim=0) if self.num_classes > 1 else all_maps[0].unsqueeze(0)
+#         else:
+#             if self.num_classes == 1:
+#                 new_target = target.copy()
+#                 new_target["labels"] = torch.ones_like(target["labels"])
+#                 rd_map = self._onehot(new_target)
+#             else:
+#                 rd_map = self._onehot(target)
+#
+#         if self.add_bg:
+#             rd_map = self._add_background(rd_map)
+#
+#         rd_map = rd_map.type(image.type())
+#
+#         if self.build_qs:
+#             if self.num_classes == 1:
+#                 qs_map = self._build_qs_gt(
+#                     target["points"],
+#                     self.img_height,
+#                     self.img_width,
+#                     self.sigma_qs
+#                 )
+#             else:
+#                 qs_maps = []
+#                 device = target["points"].device
+#                 for cls in range(self.num_classes):
+#                     cls_points = target["points"][target["labels"] == (cls + 1)]
+#                     qs_map_cls = self._build_qs_gt(
+#                         cls_points,
+#                         self.img_height,
+#                         self.img_width,
+#                         self.sigma_qs
+#                     )
+#                     qs_maps.append(qs_map_cls)
+#                 qs_map = torch.cat(qs_maps, dim=0) if len(qs_maps) > 1 else qs_maps[0]
+#
+#             qs_map = qs_map.type(image.type())
+#             return image, qs_map
+#
+#         return image, rd_map
+#
+#     def _onehot(self, target: Dict[str, torch.Tensor]) -> torch.Tensor:
+#         """
+#             Generate RD gs_map per class
+#         """
+#         device = target["points"].device
+#         rd_map = torch.zeros(
+#             (self.num_classes, self.img_height, self.img_width),
+#             device=device,
+#         )
+#
+#         if len(target["points"]) == 0:
+#             return rd_map
+#
+#         for cls in range(self.num_classes):
+#             cls_points = target["points"][target["labels"] == (cls + 1)]
+#             if len(cls_points) == 0:
+#                 continue
+#
+#             rd_map[cls] = self._reaction_diffusion(cls_points, device)
+#
+#         return rd_map
+#
+#     def _reaction_diffusion(
+#         self,
+#         points: torch.Tensor,
+#         device: torch.device,
+#     ) -> torch.Tensor:
+#         """
+#             Core RD formulation:
+#             u = G_base(S) / (1 + λ * G_density(S))
+#         """
+#         # S(x)
+#         S = torch.zeros((1, 1, self.img_height, self.img_width), device=device)
+#         indices_y = points[:, 1].long().clamp(0, self.img_height - 1)
+#         indices_x = points[:, 0].long().clamp(0, self.img_width - 1)
+#         S.view(-1).put_(indices_y * self.img_width + indices_x,
+#                         torch.ones(len(points), device=device), accumulate=True)
+#
+#         # GdS = Gd * S(x)
+#         GdS = gaussian_blur_torch(S, self.sigma_density)
+#         # GbS = Gb * S(x)
+#         GbS = gaussian_blur_torch(S, self.sigma_base)
+#
+#         # U = Gb * S(x) / (1 + lambda * Gd * S(x))
+#         # U = Gb * S(x) / (eps + 1.0 + lambda * Gd * S(x))
+#         # U = Gb * S(x) / (eps + Gb * S(x) + lambda * Gd * S(x))
+#         u = GbS / (1.0 + self.lambda_inhibit * GdS + 1e-6)
+#
+#         u = u / (u.max() + 1e-7)
+#         u = torch.pow(u, self.gamma)
+#         u = torch.max(u, S)
+#
+#         return u.squeeze(0)
+#
+#     def _add_background(self, heatmap: torch.Tensor) -> torch.Tensor:
+#         background = torch.ones((1, *heatmap.shape[1:]), device=heatmap.device)
+#         merged = heatmap.sum(dim=0, keepdim=True)
+#         background = torch.clamp(background - merged, min=0.0)
+#
+#         return torch.cat((background, heatmap), dim=0)
+#
+#     def _hybrid_transform(
+#             self,
+#             points: torch.Tensor,
+#             device: torch.device,
+#     ) -> torch.Tensor:
+#         """
+#             Hybrid RD + FIDT transform
+#             Uses FIDT implementation consistent with FIDT class
+#         """
+#         H, W = self.img_height, self.img_width
+#
+#         # Create point mask S(x)
+#         S = torch.zeros((1, 1, self.img_height, self.img_width), device=device)
+#         indices_y = points[:, 1].long().clamp(0, self.img_height - 1)
+#         indices_x = points[:, 0].long().clamp(0, self.img_width - 1)
+#         S.view(-1).put_(indices_y * self.img_width + indices_x,
+#                         torch.ones(len(points), device=device), accumulate=True)
+#
+#         GdS = gaussian_blur_torch(S, self.sigma_density)
+#         inhibition_factor = 1.0 / (1.0 + self.lambda_inhibit * GdS + 1e-6)
+#
+#         mask = torch.ones((self.img_height, self.img_width), device=device)
+#         if len(points) > 0:
+#             for point in points:
+#                 x, y = point[0], point[1]
+#                 point_buffer = _point_buffer(x, y, mask, 1)
+#                 mask[point_buffer] = 0
+#
+#         mask_cpu = mask.cpu().numpy()
+#         dist_map = scipy.ndimage.distance_transform_edt(mask_cpu)
+#         dist_map = torch.from_numpy(dist_map).to(device=device)
+#
+#         fidt_map = 1 / (torch.pow(dist_map, self.fidt_alpha * dist_map + self.fidt_beta) + 1.0)
+#         fidt_map = torch.where(fidt_map < 0.01, 0., fidt_map)
+#
+#         hybrid_map = fidt_map * inhibition_factor.squeeze(0).squeeze(0)
+#
+#         hybrid_map = hybrid_map / (hybrid_map.max() + 1e-7)
+#         hybrid_map = torch.pow(hybrid_map, self.gamma)
+#         hybrid_map = torch.max(hybrid_map, S.squeeze(0).squeeze(0))
+#
+#         return hybrid_map # (H, W)
+#
+#     def build_qs_gt(points, H, W, sigma_qs):
+#         S = torch.zeros((1, 1, H, W), device=points.device)
+#
+#         if points.numel() > 0:
+#             y = points[:, 1].long().clamp(0, H - 1)
+#             x = points[:, 0].long().clamp(0, W - 1)
+#             S.view(-1).put_(y * W + x, torch.ones(len(points), device=points.device), accumulate=True)
+#
+#         qs = gaussian_blur_torch(S, sigma_qs)
+#         qs = qs / (qs.max() + 1e-6)
+#
+#         return qs.squeeze(0)  # (1,H,W)
+#
+#     def _build_qs_gt(
+#             self,
+#             points: torch.Tensor,
+#             H: int,
+#             W: int,
+#             sigma_qs: float
+#     ) -> torch.Tensor:
+#         """
+#             Build query selection ground truth map using Gaussian blur
+#
+#             Args:
+#                 points: Point annotations tensor of shape (N, 2) where N is number of points
+#                 H: Height of output map
+#                 W: Width of output map
+#                 sigma_qs: Sigma parameter for Gaussian blur
+#
+#             Returns:
+#                 Gaussian blurred and normalized map of shape (1, H, W)
+#         """
+#         if not isinstance(points, torch.Tensor):
+#             points = torch.as_tensor(points, dtype=torch.long)
+#
+#         device = points.device
+#         S = torch.zeros((1, 1, H, W), device=device)
+#
+#         if points.numel() > 0:
+#             if points.dim() == 1:
+#                 points = points.unsqueeze(0)
+#
+#             y = points[:, 1].long().clamp(0, H - 1)
+#             x = points[:, 0].long().clamp(0, W - 1)
+#
+#             S.view(-1).put_(y * W + x, torch.ones(len(points), device=device), accumulate=True)
+#
+#         qs = gaussian_blur_torch(S, sigma_qs)
+#
+#         max_val = qs.max()
+#         if max_val > 0:
+#             qs = qs / max_val
+#
+#         return qs.squeeze(0)  # (1, H, W)
 
-        # Create point mask S(x)
-        S = torch.zeros((1, 1, self.img_height, self.img_width), device=device)
-        indices_y = points[:, 1].long().clamp(0, self.img_height - 1)
-        indices_x = points[:, 0].long().clamp(0, self.img_width - 1)
-        S.view(-1).put_(indices_y * self.img_width + indices_x,
-                        torch.ones(len(points), device=device), accumulate=True)
-
-        GdS = gaussian_blur_torch(S, self.sigma_density)
-        inhibition_factor = 1.0 / (1.0 + self.lambda_inhibit * GdS + 1e-6)
-
-        mask = torch.ones((self.img_height, self.img_width), device=device)
-        if len(points) > 0:
-            for point in points:
-                x, y = point[0], point[1]
-                point_buffer = _point_buffer(x, y, mask, 1)
-                mask[point_buffer] = 0
-
-        mask_cpu = mask.cpu().numpy()
-        dist_map = scipy.ndimage.distance_transform_edt(mask_cpu)
-        dist_map = torch.from_numpy(dist_map).to(device=device)
-
-        fidt_map = 1 / (torch.pow(dist_map, self.fidt_alpha * dist_map + self.fidt_beta) + 1.0)
-        fidt_map = torch.where(fidt_map < 0.01, 0., fidt_map)
-
-        hybrid_map = fidt_map * inhibition_factor.squeeze(0).squeeze(0)
-
-        hybrid_map = hybrid_map / (hybrid_map.max() + 1e-7)
-        hybrid_map = torch.pow(hybrid_map, self.gamma)
-        hybrid_map = torch.max(hybrid_map, S.squeeze(0).squeeze(0))
-
-        return hybrid_map # (H, W)
-
-    def build_qs_gt(points, H, W, sigma_qs):
-        S = torch.zeros((1, 1, H, W), device=points.device)
-
-        if points.numel() > 0:
-            y = points[:, 1].long().clamp(0, H - 1)
-            x = points[:, 0].long().clamp(0, W - 1)
-            S.view(-1).put_(y * W + x, torch.ones(len(points), device=points.device), accumulate=True)
-
-        qs = gaussian_blur_torch(S, sigma_qs)
-        qs = qs / (qs.max() + 1e-6)
-
-        return qs.squeeze(0)  # (1,H,W)
-
-    def _build_qs_gt(
-            self,
-            points: torch.Tensor,
-            H: int,
-            W: int,
-            sigma_qs: float
-    ) -> torch.Tensor:
-        """
-            Build query selection ground truth map using Gaussian blur
-
-            Args:
-                points: Point annotations tensor of shape (N, 2) where N is number of points
-                H: Height of output map
-                W: Width of output map
-                sigma_qs: Sigma parameter for Gaussian blur
-
-            Returns:
-                Gaussian blurred and normalized map of shape (1, H, W)
-        """
-        if not isinstance(points, torch.Tensor):
-            points = torch.as_tensor(points, dtype=torch.long)
-
-        device = points.device
-        S = torch.zeros((1, 1, H, W), device=device)
-
-        if points.numel() > 0:
-            if points.dim() == 1:
-                points = points.unsqueeze(0)
-
-            y = points[:, 1].long().clamp(0, H - 1)
-            x = points[:, 0].long().clamp(0, W - 1)
-
-            S.view(-1).put_(y * W + x, torch.ones(len(points), device=device), accumulate=True)
-
-        qs = gaussian_blur_torch(S, sigma_qs)
-
-        max_val = qs.max()
-        if max_val > 0:
-            qs = qs / max_val
-
-        return qs.squeeze(0)  # (1, H, W)
