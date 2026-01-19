@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 
 import albumentations as A
 
-from model import UNet
+from model import UNet, UNet_
 from datasets import CrowdDataset
 from datasets.transforms import DownSample
 from utils.logger import time_str
@@ -27,7 +27,7 @@ def args_parser():
     parser = argparse.ArgumentParser(description=__doc__)
 
     parser.add_argument('--data_root', default='data/crowdsat', type=str)
-    parser.add_argument('--checkpoint_path', default='weights/best_model.pth', type=str)
+    parser.add_argument('--checkpoint_path', default='weights/run_2026-01-19_13_50_51/best_model.pth', type=str)
     parser.add_argument('--output_path', default='vis', type=str)
 
     parser.add_argument('--num_classes', default=2, type=int)
@@ -73,14 +73,14 @@ def vis(args):
         ]
     )
 
-    test_loader = DataLoader(
+    test_dataloader = DataLoader(
         test_dataset,
         batch_size=1,
         shuffle=False
     )
 
     # model
-    model = UNet(num_ch=3, num_class=args.num_classes, bilinear=args.bilinear)
+    model = UNet_(in_channels=3, num_class=args.num_classes, bilinear=args.bilinear)
     model = load_model(model, args.checkpoint_path, strict=False)
     model.to(device)
     model.eval()
@@ -124,9 +124,21 @@ def vis(args):
             thickness=2
         ))
     ]
+    use_multi_scale_correction = True
+
+    if use_multi_scale_correction:
+        from utils.multi_scale_correction import MultiScaleCountCorrection
+        ms_corrector = MultiScaleCountCorrection(
+            lmds_kernel_size=args.lmds_kernel_size,
+            lmds_adapt_ts=args.lmds_adapt_ts,
+            num_classes=args.num_classes,
+            count_threshold=2.0,
+            scales=[1, 2, 4],
+            scale_weights={1: 0.5, 2: 0.3, 4: 0.2}
+        )
 
     with torch.no_grad():
-        for idx, (image, target) in enumerate(test_loader):
+        for idx, (image, target) in enumerate(test_dataloader):
 
             image = image.to(device)
             img_path = target['img_path'][0]
@@ -144,17 +156,30 @@ def vis(args):
             outputs = model(image)
             # outputs = torch.sigmoid(outputs)
 
-            counts, locs, labels, scores = lmds(outputs)
+            if use_multi_scale_correction:
+                result = ms_corrector(
+                    outputs['heatmap_out'],
+                    outputs['density_out']
+                )
+                locs_list = result['locs']
+                labels_list = result['labels']
+                scores_list = result['scores']
+            else:
+                counts, locs, labels, scores = lmds(outputs['heatmap_out'])
+                locs_list = locs[0]
+                labels_list = labels[0]
+                scores_list = scores[0]
 
             down_ratio = args.ds_down_ratio
             pred_loc = [
                 (float(x) * down_ratio, float(y) * down_ratio)
-                for (y, x), label in zip(locs[0], labels[0])
+                for (y, x), label in zip(locs_list, labels_list)
                 if label == 1  # only fg
             ]
             pred = dict(
                 loc=pred_loc,
-                labels=[1] * len(pred_loc)
+                labels=[1] * len(pred_loc),
+                scores=[s for (y, x), label, s in zip(locs_list, labels_list, scores_list) if label == 1]
             )
 
             img_pred = raw_img.copy()

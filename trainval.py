@@ -14,6 +14,7 @@ from utils import custom_collate_fn
 from utils.metrics import PointsMetrics
 from utils.engine.main import train_one_epoch, val_one_epoch
 from utils.logger import setup_default_logging, time_str
+from utils.freeze import *
 import albumentations as A
 from datasets.transforms import DownSample, FIDT, DensityMap, MultiTransformsWrapper, CustomTransformWrapper
 
@@ -28,7 +29,7 @@ def args_parser():
 
     # training parameters
     parser.add_argument('--epoch', default=150, type=int, metavar='N')
-    parser.add_argument('--batch_size', default=1, type=int, metavar='N')
+    parser.add_argument('--batch_size', default=16, type=int, metavar='N')
     parser.add_argument('--lr', default=0.0003, type=float)
     parser.add_argument('--weight_decay', default=1e-4, type=float)
     parser.add_argument('--num_worker', default=6, type=int)
@@ -55,9 +56,12 @@ def args_parser():
     parser.add_argument('--radius', default=2, type=int)
     parser.add_argument('--ptm_down_ratio', default=1, type=int)
     parser.add_argument('--lmds_kernel_size', default=3, type=int)
-    parser.add_argument('--lmds_adapt_ts', default=0.3, type=float)
+    parser.add_argument('--lmds_adapt_ts', default=0.1, type=float)
     parser.add_argument('--ds_down_ratio', default=1, type=int)
     parser.add_argument('--ds_crowd_type', default='point', type=str)
+
+    # unfreeze
+    parser.add_argument('--unfreeze', default=[50, 100], type=int)
 
     args = parser.parse_args()
 
@@ -96,11 +100,17 @@ def main(args):
     model = UNet_(in_channels=3, num_class=args.num_classes, bilinear=args.bilinear)
     # output: (B, 2, H, W)
     model.to(device)
+
+    freeze_all(model)
+    unfreeze_backbone(model)
+    unfreeze_heatmap(model)
+
+    scaler = torch.cuda.amp.GradScaler()
     logger.info(f'Model created and moved to {device}')
 
     # optimizer -> AdamW
     optimizer = torch.optim.AdamW(
-        model.parameters(),
+        filter(lambda p: p.requires_grad, model.parameters()),
         lr=args.lr,
         weight_decay=args.weight_decay
     )
@@ -209,11 +219,36 @@ def main(args):
         logger.info('Epoch [{:^3}/{:^3}]'.format(epoch + 1, args.epoch))
         # logger.info('=' * 60)
 
+        if epoch == args.unfreeze[0]:
+            unfreeze_offset(model)
+            optimizer = torch.optim.AdamW(
+                filter(lambda p: p.requires_grad, model.parameters()),
+                lr=args.lr,
+                weight_decay=args.weight_decay
+            )
+            trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+            logger.info(f"Optimizer reset at epoch {epoch + 1}")
+            logger.info(f'Trainable parameters: {trainable_params / 1e6:.2f} M')
+
+        elif epoch == args.unfreeze[1]:
+            unfreeze_density(model)
+            optimizer = torch.optim.AdamW(
+                filter(lambda p: p.requires_grad, model.parameters()),
+                lr=args.lr,
+                weight_decay=args.weight_decay
+            )
+            trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+            logger.info(f"Optimizer reset at epoch {epoch + 1}")
+            logger.info(f'Trainable parameters: {trainable_params / 1e6:.2f} M')
+
         # train
         loss, lr = train_one_epoch(
             model=model,
             train_dataloader=train_dataloader,
             optimizer=optimizer,
+            scaler=scaler,
             epoch=epoch + 1, # epoch -> (1, ... , )
             device=device,
             logger=logger,

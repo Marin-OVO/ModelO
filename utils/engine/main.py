@@ -22,13 +22,13 @@ def train_one_epoch(
         model: torch.nn.Module,
         train_dataloader: torch.utils.data.DataLoader,
         optimizer: torch.optim.Optimizer,
+        scaler,
         epoch: int,
         device: torch.device,
         logger: logging.Logger,
         print_freq: int,
         args,
         ) -> float:
-    scaler = GradScaler()
     # init
     first_order_loss = AverageMeter(20)
     second_order_loss = AverageMeter(20)
@@ -46,6 +46,15 @@ def train_one_epoch(
 
     model.train()
     lr = optimizer.param_groups[0]['lr']
+
+    # lmds
+    ks = args.lmds_kernel_size
+    if isinstance(ks, int):
+        ks = (ks, ks)
+    lmds = LMDS(
+        kernel_size=ks,
+        adapt_ts=args.lmds_adapt_ts
+    )
 
     # FocalLoss
     # FL = FocalLoss(reduction='mean', normalize=True)
@@ -80,14 +89,6 @@ def train_one_epoch(
             gt_offset = gt_offset.unsqueeze(0)
             gt_mask = gt_mask.unsqueeze(0).unsqueeze(0)
 
-            # lmds
-            ks = args.lmds_kernel_size
-            if isinstance(ks, int):
-                ks = (ks, ks)
-            lmds = LMDS(
-                kernel_size=ks,
-                adapt_ts=args.lmds_adapt_ts
-            )
             counts, _, _, _ = lmds(outputs['heatmap_out'])
             counts = torch.tensor(
                 counts[0][0],
@@ -98,10 +99,18 @@ def train_one_epoch(
             # loss
             heatmap_loss = FL(heatmap_out, gt_heatmap)
             offset_loss = (F.smooth_l1_loss(offset_out, gt_offset, reduction='none') * gt_mask).sum() / (gt_mask.sum() + 1e-6)
-            density_loss = F.mse_loss(density_out, gt_dense_map)
+            density_loss = 10 * F.mse_loss(density_out, gt_dense_map)
             cons_loss = F.l1_loss(density_out.sum(), counts)
 
-            total_loss = heatmap_loss + offset_loss + density_loss + 0.001 * cons_loss
+            heatmap_weight = 1.0
+            offset_weight = 1.0 if epoch >= args.unfreeze[0] else 0.0
+            density_weight = 1.0 if epoch >= args.unfreeze[1] else 0.0
+            cons_weight = 0.01 if epoch >= args.unfreeze[1] else 0.0
+
+            total_loss = (heatmap_weight * heatmap_loss +
+                          offset_weight * offset_loss +
+                          density_weight * density_loss +
+                          cons_weight * cons_loss)
 
         first_order_loss.update(heatmap_loss.detach().cpu().item())
         second_order_loss.update(offset_loss.detach().cpu().item())

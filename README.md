@@ -75,7 +75,7 @@
   - Fusion formulation:  
     `FIDT(x) * (1 / (eps + 1 + λ * Gds))`
 
-  **Results (F1-score):**(all sigmoid / no sigmoid)
+  **Results (F1-score):** (all sigmoid / no sigmoid)
   - RDMap + FIDT: 0.4325 0.4430
   - RDMap: 0.4072 0.4857
   - FIDT: 0.3979
