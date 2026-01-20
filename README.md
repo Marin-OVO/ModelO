@@ -47,10 +47,6 @@
   - **2026-01-16:** The RetinaNet-based model achieved an **F1-score of 0.1107**, which is **inferior to the UNet baseline**. A likely cause is the **inappropriate choice of feature level(s) during validation**, suggesting that the inference scale selection requires further investigation.
 
 - 2026-01-15: A new idea was proposed to extend **FCOS** by adding an auxiliary head that captures **local point density**, reflecting whether surrounding points are densely distributed. In addition, a module will be introduced to **extract higher-level semantic context** from deep features to enhance discrimination in crowded scenes.
-
-
-
-
 - 2026-01-15: Inspired by reaction-diffusion models from bacterial colonies, it was considered to replace the ground-truth mask with a **reaction-diffusion map (RDMap)**.
 
   **Details:**
@@ -90,3 +86,4 @@
   - F1-score: **0.4126**
 
 - 2026-01-17: A new idea was proposed to combine **heatmap** and **dense map** in a unified processing pipeline for crowd representation.
+> Subsequent experimental details and results will be documented in an Excel spreadsheet.
