@@ -2,7 +2,7 @@
     unet
 """
 from .conv import *
-from .head import OffsetHead, DensityHead
+from .head import OffsetHead, DensityHead, HeatmapHead
 
 
 class UNet_(nn.Module):
@@ -37,9 +37,9 @@ class UNet_(nn.Module):
         self.up3 = (UpScaling(256, 128 // factor, bilinear))
         self.up4 = (UpScaling(128, 64, bilinear))
 
-        self.heatmap_head = (OutConv(64, num_class))
-        self.offset_head = OffsetHead(in_channels=64, hidden_channels=128, out_channels=2)
-        self.density_head = DensityHead(in_channels=64, hidden_channels=128, out_channels=1)
+        self.heatmap_head = HeatmapHead(in_channels=64, out_channels=num_class, use_freq=True)
+        self.offset_head = OffsetHead(in_channels=64, hidden_channels=128, out_channels=2, use_freq=True)
+        self.density_head = DensityHead(in_channels=64, hidden_channels=128, out_channels=1, use_freq=True)
 
     def forward(self, x):
         x1 = self.inc(x)

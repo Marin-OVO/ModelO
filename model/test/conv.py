@@ -100,17 +100,3 @@ class UpScaling(nn.Module):
         x = torch.cat([x2, x1], dim=1)
 
         return self.conv(x)
-
-
-class OutConv(nn.Module):
-    """
-        1x1 conv, output prediction map
-    """
-    def __init__(self, in_ch, out_ch):
-        super(OutConv, self).__init__()
-        self.conv = nn.Conv2d(in_ch, out_ch, kernel_size=1)
-
-    def forward(self, x):
-
-        return self.conv(x)
-
