@@ -64,18 +64,22 @@ def train_one_epoch(
         # img
         images = images.to(device)
 
-        with autocast():
+        with (autocast()):
             # train outputs
             outputs = model(images)  # dict
             heatmap_out = outputs['heatmap_out']
             offset_out = outputs['offset_out']
             density_out = outputs['density_out']
+            # heatmap_out_freq = outputs['heatmap_out_freq']
+            # offset_out_freq = outputs['offset_out_freq']
+            # density_out_freq = outputs['density_out_freq']
 
             # mask
             _, _, H, W = offset_out.shape
             gt_heatmap = targets['fidt_map'].to(device)
             gt_dense_map = targets['density_map'].to(device)
             gt_points = targets['points']
+            gt_count = targets['points'].shape[1]
 
             gt_offset, gt_mask = build_gt_offset(
                 gt_points, H, W,
@@ -101,22 +105,25 @@ def train_one_epoch(
 
             # loss
             heatmap_loss = FL(heatmap_out, gt_heatmap)
+            # heatmap_loss_freq = FL(heatmap_out_freq, gt_heatmap)
+
             offset_loss = (F.smooth_l1_loss(offset_out, gt_offset, reduction='none') * gt_mask).sum() / (gt_mask.sum() + 1e-6)
             density_loss = F.mse_loss(density_out, gt_dense_map)
-            cons_loss = F.l1_loss(density_out.sum(), counts)
+            cons_loss = F.l1_loss(density_out.sum(), gt_count)
 
             heatmap_weight = 1.0
             offset_weight = 1.0
-            density_weight = 1.0
-            cons_weight = 0.01
+            density_weight = 0.1
+            cons_weight = 1.0
             # offset_weight = 1.0 if epoch >= args.unfreeze[0] else 0.0
             # density_weight = 1.0 if epoch >= args.unfreeze[1] else 0.0
             # cons_weight = 0.001 if epoch >= args.unfreeze[1] else 0.0
 
-            total_loss = (heatmap_weight * heatmap_loss +
+            total_loss = ((heatmap_weight * heatmap_loss +
                           offset_weight * offset_loss +
                           density_weight * density_loss +
-                          cons_weight * cons_loss)
+                          cons_weight * cons_loss))
+                          # 0.03 * (heatmap_loss_freq))
 
         first_order_loss.update(heatmap_loss.detach().cpu().item())
         second_order_loss.update(offset_loss.detach().cpu().item())

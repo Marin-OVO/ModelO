@@ -1,5 +1,6 @@
 """
     train and val
+    delete freeze
 """
 import argparse
 import os
@@ -56,12 +57,12 @@ def args_parser():
     parser.add_argument('--radius', default=2, type=int)
     parser.add_argument('--ptm_down_ratio', default=1, type=int)
     parser.add_argument('--lmds_kernel_size', default=3, type=int)
-    parser.add_argument('--lmds_adapt_ts', default=0.1, type=float)
+    parser.add_argument('--lmds_adapt_ts', default=0.5, type=float)
     parser.add_argument('--ds_down_ratio', default=1, type=int)
     parser.add_argument('--ds_crowd_type', default='point', type=str)
 
     # unfreeze
-    parser.add_argument('--unfreeze', default=[50, 100], type=int)
+    parser.add_argument('--unfreeze', default=[0, 0], type=int)
 
     args = parser.parse_args()
 
@@ -101,9 +102,9 @@ def main(args):
     # output: (B, 2, H, W)
     model.to(device)
 
-    freeze_all(model)
-    unfreeze_backbone(model)
-    unfreeze_heatmap(model)
+    # freeze_all(model)
+    # unfreeze_backbone(model)
+    # unfreeze_heatmap(model)
 
     scaler = torch.cuda.amp.GradScaler()
     logger.info(f'Model created and moved to {device}')
@@ -214,34 +215,45 @@ def main(args):
     map_list = []
     f1_list = []
 
-    for epoch in range(last_epoch, args.epoch):
+    for epoch in range(last_epoch, args.epoch): # (0 - 149)
         logger.info('=' * 60)
         logger.info('Epoch [{:^3}/{:^3}]'.format(epoch + 1, args.epoch))
         # logger.info('=' * 60)
 
-        if epoch == args.unfreeze[0]:
-            unfreeze_offset(model)
-            optimizer = torch.optim.AdamW(
-                filter(lambda p: p.requires_grad, model.parameters()),
-                lr=args.lr,
-                weight_decay=args.weight_decay
-            )
-            trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-            logger.info(f"Optimizer reset at epoch {epoch + 1}")
-            logger.info(f'Trainable parameters: {trainable_params / 1e6:.2f} M')
-
-        elif epoch == args.unfreeze[1]:
-            unfreeze_density(model)
-            optimizer = torch.optim.AdamW(
-                filter(lambda p: p.requires_grad, model.parameters()),
-                lr=args.lr,
-                weight_decay=args.weight_decay
-            )
-            trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-            logger.info(f"Optimizer reset at epoch {epoch + 1}")
-            logger.info(f'Trainable parameters: {trainable_params / 1e6:.2f} M')
+        # if epoch == args.unfreeze[0] - 1:
+        #     unfreeze_offset(model)
+        #
+        #     new_params = [p for p in model.parameters() if p.requires_grad and p not in
+        #                   set(p for group in optimizer.param_groups for p in group['params'])]
+        #
+        #     if new_params:
+        #         optimizer.add_param_group({
+        #             'params': new_params,
+        #             'lr': optimizer.param_groups[0]['lr'],
+        #             'weight_decay': args.weight_decay
+        #         })
+        #
+        #     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        #
+        #     logger.info(f"Added new parameters to optimizer at epoch {epoch + 1}")
+        #     logger.info(f'Trainable parameters: {trainable_params / 1e6:.2f} M')
+        #
+        # elif epoch == args.unfreeze[1] - 1:
+        #     unfreeze_density(model)
+        #
+        #     new_params = [p for p in model.parameters() if p.requires_grad and p not in
+        #                   set(p for group in optimizer.param_groups for p in group['params'])]
+        #
+        #     if new_params:
+        #         optimizer.add_param_group({
+        #             'params': new_params,
+        #             'lr': optimizer.param_groups[0]['lr'],
+        #             'weight_decay': args.weight_decay
+        #         })
+        #     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        #
+        #     logger.info(f"Optimizer reset at epoch {epoch + 1}")
+        #     logger.info(f'Trainable parameters: {trainable_params / 1e6:.2f} M')
 
         # train
         loss, lr = train_one_epoch(
@@ -249,7 +261,7 @@ def main(args):
             train_dataloader=train_dataloader,
             optimizer=optimizer,
             scaler=scaler,
-            epoch=epoch + 1, # epoch -> (1, ... , )
+            epoch=epoch,
             device=device,
             logger=logger,
             print_freq=print_freq,
@@ -262,7 +274,7 @@ def main(args):
         tmp_results = val_one_epoch(
             model=model,
             val_dataloader=val_dataloader,
-            epoch=epoch + 1,
+            epoch=epoch,
             metrics=metrics,
             args=args
         )
@@ -274,18 +286,18 @@ def main(args):
         if select == 'min':
             if tmp_results[validate_on] < best_val:
                 best_val = tmp_results[validate_on]
-                best_epoch = epoch + 1 # not tmp epoch
+                best_epoch = epoch # not tmp epoch
                 is_best = True
 
         elif select == 'max':
             if tmp_results[validate_on] > best_val:
                 best_val = tmp_results[validate_on]
-                best_epoch = epoch + 1
+                best_epoch = epoch
                 is_best = True
 
         # Save checkpoints
         state = {
-            'epoch': epoch + 1,
+            'epoch': epoch,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'scheduler_state_dict': lr_scheduler.state_dict(),
@@ -311,7 +323,7 @@ def main(args):
 
         # add the best info to results
         tmp_results['best_val'] = best_val
-        tmp_results['best_epoch'] = best_epoch
+        tmp_results['best_epoch'] = best_epoch + 1
         tmp_results['train_loss'] = loss
 
         # log to csv
@@ -330,14 +342,14 @@ def main(args):
             f"F1-score: {tmp_results['f1_score']:^8.4f} | "
             f"mAP: {tmp_results['mAP']:^8.4f} | "
             f"Best-Val({validate_on}): {best_val:^8.4f} | "
-            f"Best-Epoch: {best_epoch:^3} " # from tmp results
+            f"Best-Epoch: {best_epoch + 1:^3} " # from tmp results
         )
 
         lr_scheduler.step()
 
     logger.info('=' * 60)
     logger.info('Training Complete!')
-    logger.info(f'Best {validate_on}: {best_val:.4f} at epoch {best_epoch}')
+    logger.info(f'Best {validate_on}: {best_val:.4f} at epoch {best_epoch + 1}')
     logger.info(f'Results saved to: {work_dir}')
     logger.info('=' * 60)
 

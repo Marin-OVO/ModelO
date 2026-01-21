@@ -57,10 +57,17 @@ class UNet_(nn.Module):
         offset_out = self.offset_head(x)
         density_out = self.density_head(x)
 
+        # heatmap_out, heatmap_out_freq = self.heatmap_head(x)
+        # offset_out, offset_out_freq = self.offset_head(x)
+        # density_out, density_out_freq = self.density_head(x)
+
         return {
             'heatmap_out': heatmap_out,
             'offset_out': offset_out,
-            'density_out': density_out
+            'density_out': density_out,
+            # 'heatmap_out_freq': heatmap_out_freq,
+            # 'offset_out_freq': offset_out_freq,
+            # 'density_out_freq': density_out_freq
         }
 
     def use_checkpointing(self):

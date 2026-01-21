@@ -8,7 +8,7 @@ def plot_loss_and_lr(train_loss, learning_rate,  save_dir='./'):
         x = list(range(1, len(train_loss) + 1))
         fig, ax1 = plt.subplots(1, 1)
         ax1.plot(x, train_loss, 'r', label='loss')
-        ax1.set_xlabel("step")
+        ax1.set_xlabel("epoch")
         ax1.set_ylabel("loss")
         ax1.set_title("Train Loss and lr")
         plt.legend(loc='best')
@@ -16,7 +16,7 @@ def plot_loss_and_lr(train_loss, learning_rate,  save_dir='./'):
         ax2 = ax1.twinx()
         ax2.plot(x, learning_rate, label='lr')
         ax2.set_ylabel("learning rate")
-        ax2.set_xlim(0, len(train_loss))  # 设置横坐标整数间隔
+        ax2.set_xlim(1, len(train_loss) + 1)  # 设置横坐标整数间隔
         plt.legend(loc='best')
 
         handles1, labels1 = ax1.get_legend_handles_labels()
@@ -40,7 +40,7 @@ def plot_map(mAP, save_dir='./'):
         plt.xlabel('epoch')
         plt.ylabel('mAP')
         plt.title('Eval mAP')
-        plt.xlim(0, len(mAP))
+        plt.xlim(1, len(mAP) + 1)
         plt.legend(loc='best')
 
         filename = os.path.join(save_dir, 'mAP.png')
@@ -57,7 +57,7 @@ def plot_f1(f1, save_dir='./'):
         plt.xlabel('epoch')
         plt.ylabel('F1-score')
         plt.title('Eval F1-score')
-        plt.xlim(0, len(f1))
+        plt.xlim(1, len(f1) + 1)
         plt.legend(loc='best')
 
         filename = os.path.join(save_dir, 'F1-score.png')

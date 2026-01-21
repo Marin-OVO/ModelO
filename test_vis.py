@@ -27,7 +27,7 @@ def args_parser():
     parser = argparse.ArgumentParser(description=__doc__)
 
     parser.add_argument('--data_root', default='data/crowdsat', type=str)
-    parser.add_argument('--checkpoint_path', default='weights/run_2026-01-19_13_50_51/best_model.pth', type=str)
+    parser.add_argument('--checkpoint_path', default='weights/best_model.pth', type=str)
     parser.add_argument('--output_path', default='vis', type=str)
 
     parser.add_argument('--num_classes', default=2, type=int)
@@ -39,7 +39,7 @@ def args_parser():
     parser.add_argument('--ds_crowd_type', default='point', type=str)
 
     parser.add_argument('--lmds_kernel_size', default=3, type=int)
-    parser.add_argument('--lmds_adapt_ts', default=0.1, type=float)
+    parser.add_argument('--lmds_adapt_ts', default=0.5, type=float)
 
     return parser.parse_args()
 
@@ -56,6 +56,8 @@ def vis(args):
     tf_dir = os.path.join(work_dir, 'vis_tf')
     os.makedirs(vis_dir, exist_ok=True)
     os.makedirs(tf_dir, exist_ok=True)
+
+    csv_rows = []
 
     # dataset
     test_dataset = CrowdDataset(
@@ -124,18 +126,18 @@ def vis(args):
             thickness=2
         ))
     ]
-    use_multi_scale_correction = True
-
-    if use_multi_scale_correction:
-        from utils.multi_scale_correction import MultiScaleCountCorrection
-        ms_corrector = MultiScaleCountCorrection(
-            lmds_kernel_size=args.lmds_kernel_size,
-            lmds_adapt_ts=args.lmds_adapt_ts,
-            num_classes=args.num_classes,
-            count_threshold=2.0,
-            scales=[1, 2, 4],
-            scale_weights={1: 0.5, 2: 0.3, 4: 0.2}
-        )
+    # use_multi_scale_correction = False
+    #
+    # if use_multi_scale_correction:
+    #     from utils.multi_scale_correction import MultiScaleCountCorrection
+    #     ms_corrector = MultiScaleCountCorrection(
+    #         lmds_kernel_size=args.lmds_kernel_size,
+    #         lmds_adapt_ts=args.lmds_adapt_ts,
+    #         num_classes=args.num_classes,
+    #         count_threshold=2.0,
+    #         scales=[1, 2, 4],
+    #         scale_weights={1: 0.5, 2: 0.3, 4: 0.2}
+    #     )
 
     with torch.no_grad():
         for idx, (image, target) in enumerate(test_dataloader):
@@ -156,19 +158,24 @@ def vis(args):
             outputs = model(image)
             # outputs = torch.sigmoid(outputs)
 
-            if use_multi_scale_correction:
-                result = ms_corrector(
-                    outputs['heatmap_out'],
-                    outputs['density_out']
-                )
-                locs_list = result['locs']
-                labels_list = result['labels']
-                scores_list = result['scores']
-            else:
-                counts, locs, labels, scores = lmds(outputs['heatmap_out'])
-                locs_list = locs[0]
-                labels_list = labels[0]
-                scores_list = scores[0]
+            # if use_multi_scale_correction:
+            #     result = ms_corrector(
+            #         outputs['heatmap_out'],
+            #         outputs['density_out']
+            #     )
+            #     locs_list = result['locs']
+            #     labels_list = result['labels']
+            #     scores_list = result['scores']
+            # else:
+            #     counts, locs, labels, scores = lmds(outputs['heatmap_out'])
+            #     locs_list = locs[0]
+            #     labels_list = labels[0]
+            #     scores_list = scores[0]
+
+            counts, locs, labels, scores = lmds(outputs['heatmap_out'])
+            locs_list = locs[0]
+            labels_list = labels[0]
+            scores_list = scores[0]
 
             down_ratio = args.ds_down_ratio
             pred_loc = [
@@ -181,6 +188,19 @@ def vis(args):
                 labels=[1] * len(pred_loc),
                 scores=[s for (y, x), label, s in zip(locs_list, labels_list, scores_list) if label == 1]
             )
+
+            gt_count = len(gt_loc)
+
+            density_map = outputs['density_out']  # (1, 1, H, W)
+            density_count = density_map.sum().item()
+
+            det_count = len(pred_loc)
+            csv_rows.append([
+                os.path.basename(img_path),
+                gt_count,
+                density_count,
+                det_count
+            ])
 
             img_pred = raw_img.copy()
             drawer, cfg = pred_draw_cfg
@@ -230,6 +250,20 @@ def vis(args):
         writer.writerow(['mAP', mAP])
 
     print(f"[INFO] test metrics saved to {csv_path}")
+
+    count_csv_path = os.path.join(work_dir, 'count_per_image.csv')
+
+    with open(count_csv_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            'image_name',
+            'gt_count',
+            'density_count',
+            'pred_count'
+        ])
+        writer.writerows(csv_rows)
+
+    print(f"[INFO] per-image count csv saved to {count_csv_path}")
 
 
 if __name__ == '__main__':

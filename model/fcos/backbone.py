@@ -17,7 +17,7 @@ class Bottleneck(nn.Module):
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
 
-        # in_ch -> out_ch
+        # in_channels -> out_channels
         self.conv1 = nn.Conv2d(in_channels=in_channel, out_channels=out_channel,
                                kernel_size=1, stride=1, bias=False)  # squeeze channels
         self.bn1 = norm_layer(out_channel)
@@ -27,7 +27,7 @@ class Bottleneck(nn.Module):
                                kernel_size=3, stride=stride, bias=False, padding=1)
         self.bn2 = norm_layer(out_channel)
 
-        # in_ch -> out_ch * scale
+        # in_channels -> out_channels * scale
         self.conv3 = nn.Conv2d(in_channels=out_channel, out_channels=out_channel * self.expansion,
                                kernel_size=1, stride=1, bias=False)  # unsqueeze channels
         self.bn3 = norm_layer(out_channel * self.expansion)
@@ -40,17 +40,17 @@ class Bottleneck(nn.Module):
         if self.downsample is not None:
             identity = self.downsample(x)
 
-        # input -> conv1x1 + bn + relu (B, out_ch ,H, W)
+        # input -> conv1x1 + bn + relu (B, out_channels ,H, W)
         out = self.conv1(x)
         out = self.bn1(out)
         out = self.relu(out)
 
-        # input -> conv3x3 + bn + relu (B, out_ch ,H/s, W/s)
+        # input -> conv3x3 + bn + relu (B, out_channels ,H/s, W/s)
         out = self.conv2(out)
         out = self.bn2(out)
         out = self.relu(out)
 
-        # input -> conv1x1 + bn + relu (B, out_ch * scale ,H/s, W/s)
+        # input -> conv1x1 + bn + relu (B, out_channels * scale ,H/s, W/s)
         out = self.conv3(out)
         out = self.bn3(out)
 

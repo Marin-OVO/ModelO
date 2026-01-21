@@ -18,7 +18,7 @@ from utils.engine.engine4th import train_one_epoch, val_one_epoch
 from utils.logger import setup_default_logging, time_str
 from utils.freeze import *
 import albumentations as A
-from datasets.transforms import DownSample, FIDT, DensityMap, MultiTransformsWrapper, CustomTransformWrapper
+from datasets.transforms import DownSample, FIDT, DensityMap, CustomTransformWrapper
 
 
 # trainval
@@ -30,7 +30,7 @@ def args_parser():
     parser.add_argument('--num_classes', default=2, type=int)
 
     # training parameters
-    parser.add_argument('--epoch', default=150, type=int, metavar='N')
+    parser.add_argument('--epoch', default=5, type=int, metavar='N')
     parser.add_argument('--batch_size', default=2, type=int, metavar='N')
     parser.add_argument('--lr', default=0.0003, type=float)
     parser.add_argument('--weight_decay', default=1e-4, type=float)
@@ -63,7 +63,7 @@ def args_parser():
     parser.add_argument('--ds_crowd_type', default='point', type=str)
 
     # unfreeze
-    parser.add_argument('--unfreeze', default=[0, 0], type=int)
+    # parser.add_argument('--unfreeze', default=[0, 0], type=int)
 
     args = parser.parse_args()
 
@@ -324,7 +324,7 @@ def main(args):
 
         # add the best info to results
         tmp_results['best_val'] = best_val
-        tmp_results['best_epoch'] = best_epoch
+        tmp_results['best_epoch'] = best_epoch + 1
         tmp_results['train_loss'] = loss
 
         # log to csv

@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from model.modules import TaskSpecificThreeBandHFP
+from model.modules import LearnableFrequencyHead
 
 
 class HeatmapHead(nn.Module):
@@ -13,6 +14,7 @@ class HeatmapHead(nn.Module):
         super().__init__()
         self.use_freq = use_freq
         if use_freq:
+            # self.freq_enhance = LearnableFrequencyHead(in_channels, task_type='heatmap')
             self.freq_enhance = TaskSpecificThreeBandHFP(in_channels, task_type='heatmap')
 
         self.conv = nn.Sequential(
@@ -26,6 +28,13 @@ class HeatmapHead(nn.Module):
 
         heatmap_out = self.conv(x)
 
+        # if not self.use_freq:
+        #     return heatmap_out, None
+        #
+        # heatmap_out_freq = self.freq_enhance(x)
+        # heatmap_out_freq = self.conv(heatmap_out_freq)
+        #
+        # return heatmap_out, heatmap_out_freq
         return heatmap_out
 
 
@@ -40,6 +49,7 @@ class OffsetHead(nn.Module):
         super().__init__()
         self.use_freq = use_freq
         if use_freq:
+            # self.freq_enhance = LearnableFrequencyHead(in_channels, task_type='offset')
             self.freq_enhance = TaskSpecificThreeBandHFP(in_channels, task_type='offset')
 
         self.conv = nn.Sequential(
@@ -71,6 +81,7 @@ class DensityHead(nn.Module):
         super().__init__()
         self.use_freq = use_freq
         if use_freq:
+            # self.freq_enhance = LearnableFrequencyHead(in_channels, task_type='density')
             self.freq_enhance = TaskSpecificThreeBandHFP(in_channels, task_type='density')
 
         self.conv = nn.Sequential(
@@ -86,6 +97,6 @@ class DensityHead(nn.Module):
         if self.use_freq:
             x = self.freq_enhance(x)
 
-        density_out =self.conv(x)
+        density_out = self.conv(x)
 
         return density_out
