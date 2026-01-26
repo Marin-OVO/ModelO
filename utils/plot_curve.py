@@ -1,4 +1,6 @@
 import os
+import numpy as np
+
 import datetime
 import matplotlib.pyplot as plt
 
@@ -66,3 +68,60 @@ def plot_f1(f1, save_dir='./'):
         print("successful save F1-score curve!")
     except Exception as e:
         print(e)
+
+def plot_mae(mae, save_dir='./'):
+    try:
+        x = list(range(1, len(mae) + 1))
+        plt.plot(x, mae, label='MAE')
+        plt.xlabel('epoch')
+        plt.ylabel('MAE')
+        plt.title('Eval MAE')
+        plt.xlim(1, len(mae) + 1)
+        plt.legend(loc='best')
+
+        filename = os.path.join(save_dir, 'MAE.png')
+        plt.savefig(filename)
+        plt.close()
+        print("successful save MAE curve!")
+    except Exception as e:
+        print(e)
+
+def plot_rmse(rmse, save_dir='./'):
+    try:
+        x = list(range(1, len(rmse) + 1))
+        plt.plot(x, rmse, label='RMSE')
+        plt.xlabel('epoch')
+        plt.ylabel('RMSE')
+        plt.title('Eval RMSE')
+        plt.xlim(1, len(rmse) + 1)
+        plt.legend(loc='best')
+
+        filename = os.path.join(save_dir, 'RMSE.png')
+        plt.savefig(filename)
+        plt.close()
+        print("successful save RMSE curve!")
+    except Exception as e:
+        print(e)
+
+def plot_dense(gt, pred, save_dir='./', name='dense'):
+    gt = np.asarray(gt)
+    pred = np.asarray(pred)
+
+    max_val = max(gt.max(), pred.max())
+
+    plt.figure(figsize=(6, 6))
+    plt.scatter(gt, pred, s=10, alpha=0.6)
+    plt.plot([0, max_val], [0, max_val], 'r--', linewidth=1)
+
+    plt.xlabel('GT Count')
+    plt.ylabel('Predicted Count')
+
+    plt.xlim(0, max_val)
+    plt.ylim(0, max_val)
+    plt.grid(True, linestyle='--', alpha=0.5)
+
+    save_path = os.path.join(save_dir, f'{name}.png')
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f'successful save {name}!')
